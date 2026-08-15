@@ -291,6 +291,14 @@ Tauri 单实例插件必须是 Builder 注册的第一个插件。第二次启�
 只改 `settings.json` 不够——Studio 进程内存里的旧值会写回磁盘，且已注入的
 payload 闭包仍带着旧 `taskIntensity`，MutationObserver 会持续把 CSS 变量打回 `0`。
 
+### 登录页（登录 ChatGPT）仍是实心深色
+
+原因：背景层与样式已注入，但登录页没有 `main.main-surface`。全屏居中壳
+`#root div.fixed.inset-0 > div…bg-token-main-surface-primary` 直接铺约 `#181818`，
+把墙纸盖住。同时该页会被误判为任务页。
+
+处理：清掉该壳实底；登录页按首页强度（`codex-background-home`）控制。
+
 ### 应用后卡在「正在处理」、退出也无响应
 
 常见组合：

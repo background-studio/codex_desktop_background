@@ -167,6 +167,9 @@ mod tests {
         let payload = build_active_payload(&item, &path, &DisplaySettings::default()).unwrap();
         assert!(payload.script.contains("codex-background-layer"));
         assert!(payload.script.contains("diffs-container"));
+        assert!(payload.script.contains(
+            r#"#root div.fixed.inset-0 > div[class~="flex"][class~="h-full"][class~="w-full"][class~="items-center"][class~="justify-center"][class~="bg-token-main-surface-primary"]"#,
+        ));
         assert!(payload.script.contains(PENDING_MEDIA_URL_KEY));
         assert!(!payload.script.contains("data:image/png;base64,"));
         assert!(payload

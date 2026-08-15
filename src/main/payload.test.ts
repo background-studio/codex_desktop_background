@@ -21,6 +21,9 @@ describe("renderer payload", () => {
     expect(payload).toContain("pointer-events: auto !important");
     expect(payload).toContain("codex-background-home");
     expect(payload).toContain("codex-background-task");
+    expect(payload).toContain(
+      '#root div.fixed.inset-0 > div[class~=\\"flex\\"][class~=\\"h-full\\"][class~=\\"w-full\\"][class~=\\"items-center\\"][class~=\\"justify-center\\"][class~=\\"bg-token-main-surface-primary\\"]',
+    );
     expect(payload).toContain("media.playbackRate");
     expect(payload).toContain("MainContentViewport");
     expect(payload).toContain(".app-shell-main-content-viewport");

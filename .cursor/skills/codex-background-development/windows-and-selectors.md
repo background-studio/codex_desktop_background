@@ -57,9 +57,20 @@ Codex class 名可能随版本变化。这里记录的是稳定入口和定位�
 ### 首页与任务页识别
 
 - 首页检测：`[role="main"]:has([data-testid="home-icon"])`
+- 登录页检测：`#root div.fixed.inset-0 > div.flex.h-full.w-full.items-center.justify-center.bg-token-main-surface-primary`
 - 根 class：`codex-background-home` 或 `codex-background-task`
 - 背景强度：`homeIntensity`、`taskIntensity`
+- 登录页按首页强度控制（无 home-icon，但属于落地页）。
 - 不要按 URL 猜路由；Codex 内部导航可能不改变可依赖的普通 URL。
+
+### 登录页（登录 ChatGPT）
+
+- 用户入口：未登录时的「登录 ChatGPT / 继续登录 / 使用其他方式登录 / 注册」。
+- 无 `main.main-surface` / `MainContentSurface`；背景层虽已注入，仍会被全屏壳挡住。
+- 挡住背景的实底层：
+  `#root div.fixed.inset-0 > div[class~="flex"][class~="h-full"][class~="w-full"][class~="items-center"][class~="justify-center"][class~="bg-token-main-surface-primary"]`
+- 处理：该壳 `background` / `background-color` 透明，并保留 `pointer-events: auto`。
+- 不要给登录按钮去底色；白底「继续登录」与描边「使用其他方式登录」保持原生样式。
 
 ## 左侧入口页面
 

@@ -7,6 +7,15 @@ html.codex-background-active body {
   background: transparent !important;
 }
 
+/* 登录页（登录 ChatGPT）没有 main.main-surface：全屏居中壳直接铺
+   bg-token-main-surface-primary（约 #181818），会整页盖住已注入的背景层。
+   清掉这层实底即可透出墙纸；按钮本身仍保留原生底色。 */
+html.codex-background-active #root div.fixed.inset-0 > div[class~="flex"][class~="h-full"][class~="w-full"][class~="items-center"][class~="justify-center"][class~="bg-token-main-surface-primary"] {
+  background: transparent !important;
+  background-color: transparent !important;
+  pointer-events: auto !important;
+}
+
 /* 只抬主应用根节点，不要用 body > :not(layer) 扫到 portal。
    否则临时聊天确认框等 fixed dialog 会被改成 relative，移出视口后仍拦截焦点。
    同时把主壳锁在视口高度：透明化后 #root 下 flex 壳会被长对话撑高，
@@ -596,7 +605,11 @@ export function buildRendererPayload(input: PayloadInput) {
       setProp("--cbg-terminal-opacity", String(config.display.terminalOpacity));
       setProp("--cbg-media-url", 'url("' + String(blobUrl).replace(/["\\\n\r]/g, "") + '")');
 
-      const home = Boolean(document.querySelector('[role="main"]:has([data-testid="home-icon"])'));
+      // 登录页无 home-icon，但视觉上更接近落地页；按首页强度控制，避免落到任务页强度 0。
+      const login = Boolean(document.querySelector(
+        '#root div.fixed.inset-0 > div[class~="flex"][class~="h-full"][class~="w-full"][class~="items-center"][class~="justify-center"][class~="bg-token-main-surface-primary"]'
+      ));
+      const home = login || Boolean(document.querySelector('[role="main"]:has([data-testid="home-icon"])'));
       setClass("codex-background-home", home);
       setClass("codex-background-task", !home);
       return true;
