@@ -1,6 +1,8 @@
-// Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    codex_background_studio_lib::run();
+    if let Err(error) = codex_background_studio_lib::run() {
+        eprintln!("{error}");
+        std::process::exit(1);
+    }
 }

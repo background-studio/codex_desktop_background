@@ -20,12 +20,13 @@ use crate::{
         candidate_still_present, debug_ports_from_records, has_remote_debugging_arg,
         snapshot_matching_processes, snapshot_matching_records, HostedAction, HostedInput,
         HostedMachine, ProcessKey, ProcessRecord, MSG_AUTO_APPLIED, MSG_DEBUG_TIMEOUT,
-        MSG_EXISTING, MSG_NEED_MEDIA, MSG_SUSPENDED, MSG_TAKING_OVER, MSG_WAITING, MSG_WAIT_DEBUG,
-        PHASE_ACTIVE, PHASE_BLOCKED, PHASE_ERROR, PHASE_PAUSED, PHASE_STARTING, PHASE_WAITING,
+        MSG_EXISTING, MSG_NEED_MEDIA, MSG_SUSPENDED, MSG_TAKING_OVER, MSG_UNCONFIGURED,
+        MSG_WAITING, MSG_WAIT_DEBUG, PHASE_ACTIVE, PHASE_BLOCKED, PHASE_ERROR, PHASE_PAUSED,
+        PHASE_STARTING, PHASE_WAITING,
     },
     models::RuntimeStatus,
     payload::ActivePayload,
-    settings::write_json_transaction,
+    persist::write_json_transaction,
 };
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -415,9 +416,6 @@ impl CodexController {
     }
 
     fn mark_managed(&mut self, install: &CodexInstall) {
-        if !self.hosted.is_armed() {
-            return;
-        }
         let keys = self.current_keys(install).unwrap_or_default();
         self.hosted.rearm_after_apply(&keys);
     }
@@ -780,6 +778,15 @@ impl CodexController {
         }
     }
 
+    pub fn note_unconfigured_wait(&mut self) {
+        if self.hosted.is_paused() {
+            self.set_status(PHASE_PAUSED, MSG_SUSPENDED, None, None);
+            return;
+        }
+        self.set_status(PHASE_WAITING, MSG_UNCONFIGURED, None, None);
+    }
+
+    #[allow(dead_code)]
     pub fn note_payload_unavailable(&mut self, error: &str) -> Result<(), String> {
         let keys = self
             .install
@@ -789,8 +796,8 @@ impl CodexController {
         if !keys.is_empty() {
             self.hosted.note_takeover_failed(&keys);
         }
-        if error.contains("请先从媒体库选择") {
-            self.set_status(PHASE_BLOCKED, MSG_NEED_MEDIA, None, None);
+        if error.contains("尚未配置") || error.contains("请先从媒体库选择") {
+            self.set_status(PHASE_BLOCKED, MSG_UNCONFIGURED, None, None);
         } else {
             self.set_status(PHASE_ERROR, error, None, Some(error.to_string()));
         }
@@ -826,6 +833,7 @@ impl CodexController {
         self.apply_inner(payload, true, true)
     }
 
+    #[allow(dead_code)]
     pub fn reconnect_saved(&mut self, payload: ActivePayload) -> Result<bool, String> {
         if self.state.is_none() {
             return Ok(false);

@@ -713,14 +713,15 @@ mod tests {
     #[test]
     #[ignore = "requires a live Codex CDP endpoint on port 9335"]
     fn reads_live_codex_with_reqwest() {
-        let body = tauri::async_runtime::block_on(async {
-            reqwest::get("http://127.0.0.1:9335/json/version")
-                .await
-                .expect("connect with reqwest")
-                .text()
-                .await
-                .expect("read response")
-        });
+        let body = reqwest::blocking::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("reqwest client")
+            .get("http://127.0.0.1:9335/json/version")
+            .send()
+            .expect("connect with reqwest")
+            .text()
+            .expect("read response");
         assert!(body.contains("webSocketDebuggerUrl"));
     }
 

@@ -11,49 +11,11 @@ pub enum FitMode {
     Tile,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum SlideshowOrder {
-    #[default]
-    Sequential,
-    Random,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum MediaKind {
     Image,
     Video,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum MediaOrigin {
-    Local,
-    Remote,
-    Api,
-    Folder,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MediaItem {
-    pub id: String,
-    pub name: String,
-    pub kind: MediaKind,
-    pub origin: MediaOrigin,
-    pub file_name: String,
-    pub mime_type: String,
-    pub byte_size: u64,
-    pub sha256: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_url: Option<String>,
-    /// 文件夹源内扫描到的媒体数量；普通文件条目不使用。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub file_count: Option<u64>,
-    pub created_at: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub preview_url: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -106,133 +68,6 @@ impl Default for DisplaySettings {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SlideshowSettings {
-    pub enabled: bool,
-    pub interval_seconds: u64,
-    pub order: SlideshowOrder,
-}
-
-impl Default for SlideshowSettings {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            interval_seconds: 300,
-            order: SlideshowOrder::Sequential,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BehaviorSettings {
-    pub close_to_tray: bool,
-    pub start_minimized: bool,
-    pub auto_start_with_windows: bool,
-    pub launch_codex_on_apply: bool,
-}
-
-impl Default for BehaviorSettings {
-    fn default() -> Self {
-        Self {
-            close_to_tray: true,
-            start_minimized: false,
-            auto_start_with_windows: false,
-            launch_codex_on_apply: true,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AppSettings {
-    pub schema_version: u8,
-    pub active_media_id: Option<String>,
-    pub playlist_ids: Vec<String>,
-    pub display: DisplaySettings,
-    pub slideshow: SlideshowSettings,
-    pub behavior: BehaviorSettings,
-}
-
-impl Default for AppSettings {
-    fn default() -> Self {
-        Self {
-            schema_version: 1,
-            active_media_id: None,
-            playlist_ids: Vec::new(),
-            display: DisplaySettings::default(),
-            slideshow: SlideshowSettings::default(),
-            behavior: BehaviorSettings::default(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DisplayPatch {
-    pub fit: Option<FitMode>,
-    pub position_x: Option<f64>,
-    pub position_y: Option<f64>,
-    pub opacity: Option<f64>,
-    pub blur: Option<f64>,
-    pub scale: Option<f64>,
-    pub overlay_color: Option<String>,
-    pub overlay_opacity: Option<f64>,
-    pub home_intensity: Option<f64>,
-    pub task_intensity: Option<f64>,
-    pub sidebar_opacity: Option<f64>,
-    pub surface_opacity: Option<f64>,
-    pub composer_opacity: Option<f64>,
-    pub menu_opacity: Option<f64>,
-    pub terminal_opacity: Option<f64>,
-    pub enabled_on_home: Option<bool>,
-    pub enabled_on_tasks: Option<bool>,
-    pub video_muted: Option<bool>,
-    pub video_playback_rate: Option<f64>,
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SlideshowPatch {
-    pub enabled: Option<bool>,
-    pub interval_seconds: Option<f64>,
-    pub order: Option<SlideshowOrder>,
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BehaviorPatch {
-    pub close_to_tray: Option<bool>,
-    pub start_minimized: Option<bool>,
-    pub auto_start_with_windows: Option<bool>,
-    pub launch_codex_on_apply: Option<bool>,
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SettingsPatch {
-    pub active_media_id: Option<Option<String>>,
-    pub playlist_ids: Option<Vec<String>>,
-    pub display: Option<DisplayPatch>,
-    pub slideshow: Option<SlideshowPatch>,
-    pub behavior: Option<BehaviorPatch>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct DownloadRequest {
-    pub url: String,
-    #[serde(default)]
-    pub dynamic: bool,
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ApplyRequest {
-    #[allow(dead_code)]
-    pub restart_existing: Option<bool>,
-}
-
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeStatus {
@@ -248,8 +83,8 @@ pub struct RuntimeStatus {
 impl Default for RuntimeStatus {
     fn default() -> Self {
         Self {
-            phase: "idle".to_string(),
-            message: "尚未连接 Codex".to_string(),
+            phase: "waiting".to_string(),
+            message: crate::managed_launch::MSG_UNCONFIGURED.to_string(),
             active_targets: 0,
             codex_version: None,
             last_error: None,
@@ -257,318 +92,165 @@ impl Default for RuntimeStatus {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AppSnapshot {
-    pub settings: AppSettings,
-    pub library: Vec<MediaItem>,
-    pub runtime: RuntimeStatus,
-    pub data_directory: String,
-}
+const DISPLAY_KEYS: &[&str] = &[
+    "fit",
+    "positionX",
+    "positionY",
+    "opacity",
+    "blur",
+    "scale",
+    "overlayColor",
+    "overlayOpacity",
+    "homeIntensity",
+    "taskIntensity",
+    "sidebarOpacity",
+    "surfaceOpacity",
+    "composerOpacity",
+    "menuOpacity",
+    "terminalOpacity",
+    "enabledOnHome",
+    "enabledOnTasks",
+    "videoMuted",
+    "videoPlaybackRate",
+];
 
-#[derive(Clone, Debug, Default, Serialize)]
-pub struct ImportResult {
-    pub added: Vec<MediaItem>,
-    pub skipped: Vec<SkippedImport>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct SkippedImport {
-    pub path: String,
-    pub reason: String,
-}
-
-fn object<'a>(value: &'a Value, key: &str) -> Option<&'a serde_json::Map<String, Value>> {
-    value.get(key)?.as_object()
-}
-
-fn number(map: Option<&serde_json::Map<String, Value>>, key: &str, fallback: f64) -> f64 {
-    map.and_then(|value| value.get(key))
-        .and_then(|value| {
-            value
-                .as_f64()
-                .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
-        })
-        .filter(|value| value.is_finite())
-        .unwrap_or(fallback)
-}
-
-fn boolean(map: Option<&serde_json::Map<String, Value>>, key: &str, fallback: bool) -> bool {
-    map.and_then(|value| value.get(key))
-        .and_then(Value::as_bool)
-        .unwrap_or(fallback)
-}
-
-fn clamp(value: f64, minimum: f64, maximum: f64) -> f64 {
-    value.clamp(minimum, maximum)
-}
-
-impl AppSettings {
-    pub fn normalize(value: &Value) -> Self {
-        let defaults = Self::default();
-        let display = object(value, "display");
-        let slideshow = object(value, "slideshow");
-        let behavior = object(value, "behavior");
-
-        let fit = display
-            .and_then(|map| map.get("fit"))
-            .and_then(Value::as_str)
-            .and_then(|fit| match fit {
-                "cover" => Some(FitMode::Cover),
-                "contain" => Some(FitMode::Contain),
-                "fill" => Some(FitMode::Fill),
-                "tile" => Some(FitMode::Tile),
-                _ => None,
-            })
-            .unwrap_or(defaults.display.fit);
-        let order = slideshow
-            .and_then(|map| map.get("order"))
-            .and_then(Value::as_str)
-            .and_then(|order| match order {
-                "sequential" => Some(SlideshowOrder::Sequential),
-                "random" => Some(SlideshowOrder::Random),
-                _ => None,
-            })
-            .unwrap_or(defaults.slideshow.order);
-        let overlay_color = display
-            .and_then(|map| map.get("overlayColor"))
-            .and_then(Value::as_str)
-            .filter(|color| {
-                color.len() == 7
-                    && color.starts_with('#')
-                    && color[1..]
-                        .chars()
-                        .all(|character| character.is_ascii_hexdigit())
-            })
-            .map(str::to_ascii_lowercase)
-            .unwrap_or(defaults.display.overlay_color);
-        let active_media_id = value
-            .get("activeMediaId")
-            .and_then(Value::as_str)
-            .filter(|id| id.len() <= 120)
-            .map(str::to_string);
-        let mut playlist_ids = Vec::new();
-        if let Some(values) = value.get("playlistIds").and_then(Value::as_array) {
-            for id in values
-                .iter()
-                .filter_map(Value::as_str)
-                .filter(|id| id.len() <= 120)
-            {
-                if !playlist_ids.iter().any(|existing| existing == id) {
-                    playlist_ids.push(id.to_string());
-                }
-            }
-        }
-
-        Self {
-            schema_version: 1,
-            active_media_id,
-            playlist_ids,
-            display: DisplaySettings {
-                fit,
-                position_x: clamp(
-                    number(display, "positionX", defaults.display.position_x),
-                    0.0,
-                    100.0,
-                ),
-                position_y: clamp(
-                    number(display, "positionY", defaults.display.position_y),
-                    0.0,
-                    100.0,
-                ),
-                opacity: clamp(
-                    number(display, "opacity", defaults.display.opacity),
-                    0.0,
-                    1.0,
-                ),
-                blur: clamp(number(display, "blur", defaults.display.blur), 0.0, 40.0),
-                scale: clamp(number(display, "scale", defaults.display.scale), 1.0, 1.3),
-                overlay_color,
-                overlay_opacity: clamp(
-                    number(display, "overlayOpacity", defaults.display.overlay_opacity),
-                    0.0,
-                    0.9,
-                ),
-                home_intensity: clamp(
-                    number(display, "homeIntensity", defaults.display.home_intensity),
-                    0.0,
-                    1.0,
-                ),
-                task_intensity: clamp(
-                    number(display, "taskIntensity", defaults.display.task_intensity),
-                    0.0,
-                    1.0,
-                ),
-                sidebar_opacity: clamp(
-                    number(display, "sidebarOpacity", defaults.display.sidebar_opacity),
-                    0.0,
-                    1.0,
-                ),
-                surface_opacity: clamp(
-                    number(display, "surfaceOpacity", defaults.display.surface_opacity),
-                    0.0,
-                    1.0,
-                ),
-                composer_opacity: clamp(
-                    number(
-                        display,
-                        "composerOpacity",
-                        defaults.display.composer_opacity,
-                    ),
-                    0.0,
-                    1.0,
-                ),
-                menu_opacity: clamp(
-                    number(display, "menuOpacity", defaults.display.menu_opacity),
-                    0.0,
-                    1.0,
-                ),
-                terminal_opacity: clamp(
-                    number(
-                        display,
-                        "terminalOpacity",
-                        defaults.display.terminal_opacity,
-                    ),
-                    0.0,
-                    1.0,
-                ),
-                enabled_on_home: boolean(
-                    display,
-                    "enabledOnHome",
-                    defaults.display.enabled_on_home,
-                ),
-                enabled_on_tasks: boolean(
-                    display,
-                    "enabledOnTasks",
-                    defaults.display.enabled_on_tasks,
-                ),
-                video_muted: boolean(display, "videoMuted", defaults.display.video_muted),
-                video_playback_rate: clamp(
-                    number(
-                        display,
-                        "videoPlaybackRate",
-                        defaults.display.video_playback_rate,
-                    ),
-                    0.25,
-                    2.0,
-                ),
-            },
-            slideshow: SlideshowSettings {
-                enabled: boolean(slideshow, "enabled", defaults.slideshow.enabled),
-                interval_seconds: clamp(
-                    number(
-                        slideshow,
-                        "intervalSeconds",
-                        defaults.slideshow.interval_seconds as f64,
-                    ),
-                    10.0,
-                    86_400.0,
-                )
-                .round() as u64,
-                order,
-            },
-            behavior: BehaviorSettings {
-                close_to_tray: boolean(behavior, "closeToTray", defaults.behavior.close_to_tray),
-                start_minimized: boolean(
-                    behavior,
-                    "startMinimized",
-                    defaults.behavior.start_minimized,
-                ),
-                auto_start_with_windows: boolean(
-                    behavior,
-                    "autoStartWithWindows",
-                    defaults.behavior.auto_start_with_windows,
-                ),
-                launch_codex_on_apply: boolean(
-                    behavior,
-                    "launchCodexOnApply",
-                    defaults.behavior.launch_codex_on_apply,
-                ),
-            },
-        }
+fn number_field(map: &serde_json::Map<String, Value>, key: &str) -> Result<Option<f64>, String> {
+    let Some(value) = map.get(key) else {
+        return Ok(None);
+    };
+    let number = value
+        .as_f64()
+        .or_else(|| value.as_i64().map(|value| value as f64))
+        .or_else(|| value.as_u64().map(|value| value as f64))
+        .ok_or_else(|| format!("display.{key} 必须是数字。"))?;
+    if !number.is_finite() {
+        return Err(format!("display.{key} 不是有效数字。"));
     }
+    Ok(Some(number))
+}
 
-    pub fn apply_patch(&mut self, patch: SettingsPatch) {
-        if let Some(id) = patch.active_media_id {
-            self.active_media_id = id.filter(|id| id.len() <= 120);
-        }
-        if let Some(ids) = patch.playlist_ids {
-            self.playlist_ids.clear();
-            for id in ids.into_iter().filter(|id| id.len() <= 120) {
-                if !self.playlist_ids.contains(&id) {
-                    self.playlist_ids.push(id);
-                }
+fn require_range(value: f64, minimum: f64, maximum: f64, key: &str) -> Result<f64, String> {
+    if value < minimum || value > maximum {
+        return Err(format!("display.{key} 超出范围 {minimum}..={maximum}。"));
+    }
+    Ok(value)
+}
+
+fn boolean_field(map: &serde_json::Map<String, Value>, key: &str) -> Result<Option<bool>, String> {
+    let Some(value) = map.get(key) else {
+        return Ok(None);
+    };
+    value
+        .as_bool()
+        .ok_or_else(|| format!("display.{key} 必须是布尔值。"))
+        .map(Some)
+}
+
+impl DisplaySettings {
+    pub fn from_configure(value: &Value) -> Result<Self, String> {
+        let map = value
+            .as_object()
+            .ok_or_else(|| "display 必须是对象。".to_string())?;
+        for key in map.keys() {
+            if !DISPLAY_KEYS.contains(&key.as_str()) {
+                return Err(format!("不支持的 display 字段：{key}。"));
             }
         }
-        if let Some(patch) = patch.display {
-            if let Some(value) = patch.fit {
-                self.display.fit = value;
-            }
-            macro_rules! set_clamped {
-                ($field:ident, $minimum:expr, $maximum:expr) => {
-                    if let Some(value) = patch.$field.filter(|value| value.is_finite()) {
-                        self.display.$field = clamp(value, $minimum, $maximum);
-                    }
-                };
-            }
-            set_clamped!(position_x, 0.0, 100.0);
-            set_clamped!(position_y, 0.0, 100.0);
-            set_clamped!(opacity, 0.0, 1.0);
-            set_clamped!(blur, 0.0, 40.0);
-            set_clamped!(scale, 1.0, 1.3);
-            set_clamped!(overlay_opacity, 0.0, 0.9);
-            set_clamped!(home_intensity, 0.0, 1.0);
-            set_clamped!(task_intensity, 0.0, 1.0);
-            set_clamped!(sidebar_opacity, 0.0, 1.0);
-            set_clamped!(surface_opacity, 0.0, 1.0);
-            set_clamped!(composer_opacity, 0.0, 1.0);
-            set_clamped!(menu_opacity, 0.0, 1.0);
-            set_clamped!(terminal_opacity, 0.0, 1.0);
-            set_clamped!(video_playback_rate, 0.25, 2.0);
-            if let Some(color) = patch.overlay_color.filter(|color| {
-                color.len() == 7
-                    && color.starts_with('#')
-                    && color[1..]
+
+        let defaults = Self::default();
+        let fit = match map.get("fit") {
+            None => defaults.fit,
+            Some(value) => match value.as_str() {
+                Some("cover") => FitMode::Cover,
+                Some("contain") => FitMode::Contain,
+                Some("fill") => FitMode::Fill,
+                Some("tile") => FitMode::Tile,
+                _ => return Err("display.fit 必须是 cover、contain、fill 或 tile。".to_string()),
+            },
+        };
+        let overlay_color = match map.get("overlayColor") {
+            None => defaults.overlay_color,
+            Some(value) => {
+                let color = value
+                    .as_str()
+                    .ok_or_else(|| "display.overlayColor 必须是字符串。".to_string())?;
+                if color.len() != 7
+                    || !color.starts_with('#')
+                    || !color[1..]
                         .chars()
                         .all(|character| character.is_ascii_hexdigit())
-            }) {
-                self.display.overlay_color = color.to_ascii_lowercase();
+                {
+                    return Err("display.overlayColor 必须是 #RRGGBB。".to_string());
+                }
+                color.to_ascii_lowercase()
             }
-            macro_rules! set_boolean {
-                ($field:ident) => {
-                    if let Some(value) = patch.$field {
-                        self.display.$field = value;
-                    }
-                };
-            }
-            set_boolean!(enabled_on_home);
-            set_boolean!(enabled_on_tasks);
-            set_boolean!(video_muted);
-        }
-        if let Some(patch) = patch.slideshow {
-            if let Some(value) = patch.enabled {
-                self.slideshow.enabled = value;
-            }
-            if let Some(value) = patch.interval_seconds.filter(|value| value.is_finite()) {
-                self.slideshow.interval_seconds = clamp(value, 10.0, 86_400.0).round() as u64;
-            }
-            if let Some(value) = patch.order {
-                self.slideshow.order = value;
-            }
-        }
-        if let Some(patch) = patch.behavior {
-            macro_rules! set_behavior {
-                ($field:ident) => {
-                    if let Some(value) = patch.$field {
-                        self.behavior.$field = value;
-                    }
-                };
-            }
-            set_behavior!(close_to_tray);
-            set_behavior!(start_minimized);
-            set_behavior!(auto_start_with_windows);
-            set_behavior!(launch_codex_on_apply);
-        }
+        };
+
+        Ok(Self {
+            fit,
+            position_x: number_field(map, "positionX")?
+                .map(|value| require_range(value, 0.0, 100.0, "positionX"))
+                .transpose()?
+                .unwrap_or(defaults.position_x),
+            position_y: number_field(map, "positionY")?
+                .map(|value| require_range(value, 0.0, 100.0, "positionY"))
+                .transpose()?
+                .unwrap_or(defaults.position_y),
+            opacity: number_field(map, "opacity")?
+                .map(|value| require_range(value, 0.0, 1.0, "opacity"))
+                .transpose()?
+                .unwrap_or(defaults.opacity),
+            blur: number_field(map, "blur")?
+                .map(|value| require_range(value, 0.0, 40.0, "blur"))
+                .transpose()?
+                .unwrap_or(defaults.blur),
+            scale: number_field(map, "scale")?
+                .map(|value| require_range(value, 1.0, 1.3, "scale"))
+                .transpose()?
+                .unwrap_or(defaults.scale),
+            overlay_color,
+            overlay_opacity: number_field(map, "overlayOpacity")?
+                .map(|value| require_range(value, 0.0, 0.9, "overlayOpacity"))
+                .transpose()?
+                .unwrap_or(defaults.overlay_opacity),
+            home_intensity: number_field(map, "homeIntensity")?
+                .map(|value| require_range(value, 0.0, 1.0, "homeIntensity"))
+                .transpose()?
+                .unwrap_or(defaults.home_intensity),
+            task_intensity: number_field(map, "taskIntensity")?
+                .map(|value| require_range(value, 0.0, 1.0, "taskIntensity"))
+                .transpose()?
+                .unwrap_or(defaults.task_intensity),
+            sidebar_opacity: number_field(map, "sidebarOpacity")?
+                .map(|value| require_range(value, 0.0, 1.0, "sidebarOpacity"))
+                .transpose()?
+                .unwrap_or(defaults.sidebar_opacity),
+            surface_opacity: number_field(map, "surfaceOpacity")?
+                .map(|value| require_range(value, 0.0, 1.0, "surfaceOpacity"))
+                .transpose()?
+                .unwrap_or(defaults.surface_opacity),
+            composer_opacity: number_field(map, "composerOpacity")?
+                .map(|value| require_range(value, 0.0, 1.0, "composerOpacity"))
+                .transpose()?
+                .unwrap_or(defaults.composer_opacity),
+            menu_opacity: number_field(map, "menuOpacity")?
+                .map(|value| require_range(value, 0.0, 1.0, "menuOpacity"))
+                .transpose()?
+                .unwrap_or(defaults.menu_opacity),
+            terminal_opacity: number_field(map, "terminalOpacity")?
+                .map(|value| require_range(value, 0.0, 1.0, "terminalOpacity"))
+                .transpose()?
+                .unwrap_or(defaults.terminal_opacity),
+            enabled_on_home: boolean_field(map, "enabledOnHome")?
+                .unwrap_or(defaults.enabled_on_home),
+            enabled_on_tasks: boolean_field(map, "enabledOnTasks")?
+                .unwrap_or(defaults.enabled_on_tasks),
+            video_muted: boolean_field(map, "videoMuted")?.unwrap_or(defaults.video_muted),
+            video_playback_rate: number_field(map, "videoPlaybackRate")?
+                .map(|value| require_range(value, 0.25, 2.0, "videoPlaybackRate"))
+                .transpose()?
+                .unwrap_or(defaults.video_playback_rate),
+        })
     }
 }
 
@@ -578,30 +260,23 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn normalizes_legacy_settings_and_allows_zero_opacity() {
-        let settings = AppSettings::normalize(&json!({
-            "activeMediaId": "背景-一号",
-            "display": {
-                "fit": "invalid",
-                "opacity": 9,
-                "blur": -4,
-                "overlayColor": "red; background:url(x)",
-                "sidebarOpacity": 0,
-                "surfaceOpacity": 0,
-                "composerOpacity": 0,
-                "menuOpacity": 0,
-                "terminalOpacity": 0
-            },
-            "slideshow": { "intervalSeconds": 2, "order": "sideways" }
-        }));
-        assert_eq!(settings.active_media_id.as_deref(), Some("背景-一号"));
-        assert_eq!(settings.display.opacity, 1.0);
-        assert_eq!(settings.display.blur, 0.0);
-        assert_eq!(settings.display.sidebar_opacity, 0.0);
-        assert_eq!(settings.display.surface_opacity, 0.0);
-        assert_eq!(settings.display.composer_opacity, 0.0);
-        assert_eq!(settings.display.menu_opacity, 0.0);
-        assert_eq!(settings.display.terminal_opacity, 0.0);
-        assert_eq!(settings.slideshow.interval_seconds, 10);
+    fn rejects_unknown_or_out_of_range_display_fields() {
+        assert!(DisplaySettings::from_configure(&json!({ "slideshow": true })).is_err());
+        assert!(DisplaySettings::from_configure(&json!({ "opacity": 9 })).is_err());
+        assert!(DisplaySettings::from_configure(&json!({ "overlayColor": "red" })).is_err());
+        assert!(DisplaySettings::from_configure(&json!({ "fit": "stretch" })).is_err());
+    }
+
+    #[test]
+    fn accepts_partial_display_and_keeps_defaults() {
+        let display = DisplaySettings::from_configure(&json!({
+            "opacity": 0.4,
+            "enabledOnHome": false
+        }))
+        .unwrap();
+        assert_eq!(display.opacity, 0.4);
+        assert!(!display.enabled_on_home);
+        assert_eq!(display.fit, FitMode::Cover);
+        assert_eq!(display.scale, 1.0);
     }
 }

@@ -1,100 +1,98 @@
 # Background Studio 插件协议
 
-`pluginProtocol: 1`
+`pluginProtocol: 2`
 
-Codex / Notion Background Studio 可作为 Background Studio 壳的插件进程运行。
+Codex Background Studio 是只由 Background Studio 壳启动的无界面 worker。不再提供独立窗口、托盘或安装器。
 
 ## 启动
 
+壳启动：
+
 ```text
-CodexBackgroundStudio.exe --plugin
+"Codex Background Studio.exe"
 ```
 
-插件模式行为：
+worker 创建 Named Pipe 后等待命令。未收到有效 `configure` 之前只报告「尚未配置背景」，不会接管或关闭 Codex。
 
-- 不创建系统托盘
-- 不写本应用的 Windows 自启动项
-- 主窗口默认隐藏；由壳通过 IPC `open-ui` 打开
-- 在 Named Pipe 上提供控制接口
-- 启动后台托管 worker：不自动打开 Codex，等待用户照常启动官方程序
-- 识别到启用后新启动的普通官方进程后，按完整可执行路径确认，关闭并以 AppUserModelId 带本机调试参数重启，然后自动注入上次背景
-- 插件启动前已经在运行的普通进程不会被自动关闭；状态为“已在运行，点立即接管可重启”，由现有 IPC `apply` 手动重启接管
-- 已有有效调试会话会直接重连
-- 目标退出后清理失效调试会话并重新等待
-- `pause` / `restore` 会暂停本次插件进程内的自动接管；再次 `apply` 后重新武装
-- 停用由壳结束插件进程，不改动当前 Codex
+## Pipe
 
-独立启动（无 `--plugin`）保持原有托盘与自启动行为，不启动托管 worker。
-
-## Pipe 名称
-
-| 插件 | Pipe |
-|------|------|
-| Codex | `\\.\pipe\background-studio-codex` |
-| Notion | `\\.\pipe\background-studio-notion` |
+`\\.\pipe\background-studio-codex`
 
 ## 消息格式
 
-换行分隔 JSON（NDJSON）。主机发起请求，插件回复。
+每行一个 JSON。
 
-### 请求
+请求：
 
 ```json
-{"id":"1","cmd":"status"}
-{"id":"2","cmd":"open-ui"}
-{"id":"3","cmd":"apply"}
-{"id":"4","cmd":"pause"}
-{"id":"5","cmd":"restore"}
-{"id":"6","cmd":"quit-keep-target"}
+{"id":"1","cmd":"hello|configure|status|apply|pause|restore|shutdown","params":{}}
 ```
 
-### 成功响应
+成功：`{"id":"1","ok":true,"result":{...}}`
+
+失败：`{"id":"1","ok":false,"error":"..."}`
+
+### hello
 
 ```json
 {
-  "id": "1",
-  "ok": true,
-  "result": {
-    "pluginProtocol": 1,
-    "pluginId": "codex",
-    "version": "0.5.0",
-    "phase": "active",
-    "message": "背景已自动应用",
-    "activeTargets": 1,
-    "paused": false
+  "pluginProtocol": 2,
+  "pluginId": "codex",
+  "version": "0.5.4-beta.2",
+  "capabilities": {
+    "mediaKinds": ["image", "video"],
+    "injection": "cdp-blob",
+    "hotUpdate": true,
+    "autoTakeover": true,
+    "loopbackMediaOnly": true,
+    "keepsTargetOnShutdown": true,
+    "maxMediaBytes": 67108864,
+    "commands": ["hello", "configure", "status", "apply", "pause", "restore", "shutdown"]
   }
 }
 ```
 
-### 失败响应
+### configure
 
 ```json
-{"id":"3","ok":false,"error":"……"}
+{
+  "schemaVersion": 1,
+  "revision": "sha256-or-digest",
+  "media": {
+    "url": "http://127.0.0.1:<port>/<token>/media/<id>?v=...",
+    "kind": "image",
+    "mimeType": "image/png",
+    "sha256": "64-hex",
+    "byteSize": 123
+  },
+  "display": {
+    "fit": "cover",
+    "opacity": 0.72
+  }
+}
 ```
 
-`phase` / `message` 在插件模式下常见取值：
+约束：
 
-| phase | message | 含义 |
-|-------|---------|------|
-| `waiting` | 已启用，等待 Codex 启动 | 官方程序未运行，worker 只等待 |
-| `waiting` | 正在等待 Codex 调试端口就绪 | 已看到调试参数，端口未就绪，不编码媒体、不 attach |
-| `blocked` | Codex 已在运行，点立即接管可重启 | 启用前已有普通进程，需 IPC `apply` 手动接管 |
-| `blocked` | 请先选择背景后再接管 Codex | 看到可接管进程但还没有可注入背景 |
-| `starting` | 正在接管 Codex | 正在关闭普通进程并以调试参数重启 |
-| `active` | 背景已自动应用 | 已连接并注入上次背景 |
-| `paused` | 暂停托管 | `pause` / `restore` 后不再自动抓回 |
-| `error` | Codex 调试端口未能在 45 秒内就绪，等待进程退出后重试 | 带调试参数的进程不会被强杀，退出后重新等待 |
-| `error` | 具体错误 | 发现、启动或注入失败 |
+- URL 只接受 `http://127.0.0.1` 或 `http://localhost`，必须带显式端口
+- 拒绝 userinfo、fragment、非回环解析、端口 0、超长 URL/字段/JSON
+- 使用 `no_proxy` 客户端拉取，上限 64 MiB
+- 校验 `Content-Length`、实际大小、`sha256`、`mimeType`/`kind`
 
-协议版本仍为 `pluginProtocol: 1`，命令不变。旧壳可以忽略新增状态语义。
+配置成功后 watcher 才允许 Attach/Takeover。若当前已是 `active`，会热更新注入。`apply` 使用最近一次有效 configure，必要时重启接管并重新武装 watcher。
+
+### status
+
+在原有 `phase` / `message` / `activeTargets` / `paused` 之外增加 `configured` 和 `revision`。
+
+### shutdown
+
+退出 worker，不关闭或恢复 Codex。成功结果为 `{"shutdown":true,"keptTarget":true}`。
 
 ## Release 产物
 
-除 NSIS 安装包外，每个插件仓发布：
+`CodexBackgroundStudio-<version>-plugin.zip`
 
-- `CodexBackgroundStudio-<version>-plugin.zip`
-- `NotionBackgroundStudio-<version>-plugin.zip`
+内含 `Codex Background Studio.exe` 与 `plugin.json`。壳安装到：
 
-壳解压到：
-
-`%LOCALAPPDATA%\BackgroundStudio\plugins\<pluginId>\<version>\`
+`%LOCALAPPDATA%\BackgroundStudio\plugins\codex\<version>\`

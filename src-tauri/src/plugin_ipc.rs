@@ -1,76 +1,57 @@
-use serde::{Deserialize, Serialize};
-use serde_json::json;
-use tauri::{AppHandle, Manager};
+use std::sync::Arc;
+
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-use crate::{
-    host, lock,
-    plugin::{self, PIPE_NAME, PLUGIN_ID, PLUGIN_PROTOCOL},
-    StudioState,
-};
+use crate::plugin::runtime_pipe_name;
+use crate::worker::WorkerState;
 
-#[derive(Debug, Deserialize)]
-struct PluginRequest {
-    id: String,
-    cmd: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct StatusResult {
-    plugin_protocol: u32,
-    plugin_id: &'static str,
-    version: &'static str,
-    phase: String,
-    message: String,
-    active_targets: u32,
-    paused: bool,
-}
-
-pub fn start(app: AppHandle) {
-    tauri::async_runtime::spawn(async move {
-        if let Err(error) = serve(app).await {
-            eprintln!("Background Studio 插件 IPC 失败：{error}");
-        }
-    });
+pub async fn serve(state: Arc<WorkerState>) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        serve_windows(state).await
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = state;
+        Err("插件 IPC 仅支持 Windows。".to_string())
+    }
 }
 
 #[cfg(windows)]
-async fn serve(app: AppHandle) -> Result<(), String> {
+async fn serve_windows(state: Arc<WorkerState>) -> Result<(), String> {
     use tokio::net::windows::named_pipe::ServerOptions;
 
+    let pipe_name = runtime_pipe_name()?;
     let mut server = ServerOptions::new()
         .first_pipe_instance(true)
-        .create(PIPE_NAME)
+        .create(&pipe_name)
         .map_err(|error| format!("创建插件管道失败：{error}"))?;
 
     loop {
+        if state.is_quitting() {
+            return Ok(());
+        }
         server
             .connect()
             .await
             .map_err(|error| format!("等待插件管道连接失败：{error}"))?;
         let connected = server;
         server = ServerOptions::new()
-            .create(PIPE_NAME)
+            .create(&pipe_name)
             .map_err(|error| format!("重建插件管道失败：{error}"))?;
 
-        let app = app.clone();
-        tauri::async_runtime::spawn(async move {
-            if let Err(error) = handle_client(app, connected).await {
+        let state = Arc::clone(&state);
+        tokio::spawn(async move {
+            if let Err(error) = handle_client(state, connected).await {
                 eprintln!("插件 IPC 会话结束：{error}");
             }
         });
     }
 }
 
-#[cfg(not(windows))]
-async fn serve(_app: AppHandle) -> Result<(), String> {
-    Err("插件 IPC 仅支持 Windows。".to_string())
-}
-
 #[cfg(windows)]
 async fn handle_client(
-    app: AppHandle,
+    state: Arc<WorkerState>,
     client: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 ) -> Result<(), String> {
     let (reader, mut writer) = tokio::io::split(client);
@@ -80,14 +61,7 @@ async fn handle_client(
         if line.is_empty() {
             continue;
         }
-        let response = match serde_json::from_str::<PluginRequest>(&line) {
-            Ok(request) => dispatch(&app, request).await,
-            Err(error) => json!({
-                "id": "",
-                "ok": false,
-                "error": format!("无效请求：{error}")
-            }),
-        };
+        let response = state.handle_line(&line).await;
         let mut payload = serde_json::to_string(&response).map_err(|error| error.to_string())?;
         payload.push('\n');
         writer
@@ -95,107 +69,9 @@ async fn handle_client(
             .await
             .map_err(|error| error.to_string())?;
         writer.flush().await.map_err(|error| error.to_string())?;
+        if state.is_quitting() {
+            return Ok(());
+        }
     }
     Ok(())
-}
-
-async fn dispatch(app: &AppHandle, request: PluginRequest) -> serde_json::Value {
-    let id = request.id.clone();
-    let result = match request.cmd.as_str() {
-        "status" => status_payload(app),
-        "open-ui" => crate::open_main_window(app)
-            .map(|_| json!({ "opened": true }))
-            .map_err(|error| error),
-        "apply" => apply_via_ipc(app.clone()).await,
-        "pause" => pause_via_ipc(app.clone()).await,
-        "restore" => restore_via_ipc(app.clone()).await,
-        "quit-keep-target" => {
-            host::quit_without_touching_codex(app.clone());
-            Ok(json!({ "quitting": true }))
-        }
-        other => Err(format!("未知命令：{other}")),
-    };
-    match result {
-        Ok(value) => json!({ "id": id, "ok": true, "result": value }),
-        Err(error) => json!({ "id": id, "ok": false, "error": error }),
-    }
-}
-
-fn status_payload(app: &AppHandle) -> Result<serde_json::Value, String> {
-    let state = app.state::<StudioState>();
-    let status = state.runtime_status()?;
-    let payload = StatusResult {
-        plugin_protocol: PLUGIN_PROTOCOL,
-        plugin_id: PLUGIN_ID,
-        version: env!("CARGO_PKG_VERSION"),
-        phase: status.phase.clone(),
-        message: status.message,
-        active_targets: status.active_targets,
-        paused: status.phase == "paused",
-    };
-    serde_json::to_value(payload).map_err(|error| error.to_string())
-}
-
-async fn apply_via_ipc(app: AppHandle) -> Result<serde_json::Value, String> {
-    let state = app.state::<StudioState>();
-    let app_for_payload = app.clone();
-    let payload = tauri::async_runtime::spawn_blocking(move || {
-        app_for_payload.state::<StudioState>().active_payload()
-    })
-    .await
-    .map_err(|error| error.to_string())??;
-    let controller = std::sync::Arc::clone(&state.controller);
-    let first_payload = payload.clone();
-    let first = tauri::async_runtime::spawn_blocking(move || {
-        lock(&controller)?.apply(first_payload, false)
-    })
-    .await
-    .map_err(|error| error.to_string())?;
-    let _ = state.refresh_runtime_status();
-    match first {
-        Ok(_) => status_payload(&app),
-        Err(error) if error.contains("需要重启一次") => {
-            let controller = std::sync::Arc::clone(&state.controller);
-            let retry = tauri::async_runtime::spawn_blocking(move || {
-                lock(&controller)?.apply(payload, true)
-            })
-            .await
-            .map_err(|error| error.to_string())?;
-            let _ = state.refresh_runtime_status();
-            retry?;
-            status_payload(&app)
-        }
-        Err(error) => Err(error),
-    }
-}
-
-async fn pause_via_ipc(app: AppHandle) -> Result<serde_json::Value, String> {
-    let state = app.state::<StudioState>();
-    state
-        .live_apply_generation
-        .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-    let controller = std::sync::Arc::clone(&state.controller);
-    tauri::async_runtime::spawn_blocking(move || lock(&controller)?.pause())
-        .await
-        .map_err(|error| error.to_string())??;
-    let _ = state.refresh_runtime_status();
-    status_payload(&app)
-}
-
-async fn restore_via_ipc(app: AppHandle) -> Result<serde_json::Value, String> {
-    let state = app.state::<StudioState>();
-    state
-        .live_apply_generation
-        .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-    let controller = std::sync::Arc::clone(&state.controller);
-    tauri::async_runtime::spawn_blocking(move || lock(&controller)?.restore())
-        .await
-        .map_err(|error| error.to_string())??;
-    let _ = state.refresh_runtime_status();
-    status_payload(&app)
-}
-
-#[allow(dead_code)]
-pub fn plugin_mode_enabled() -> bool {
-    plugin::is_plugin_mode()
 }

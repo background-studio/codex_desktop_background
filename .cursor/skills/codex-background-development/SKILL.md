@@ -1,6 +1,6 @@
 ---
 name: codex-background-development
-description: Maintains Codex Background Studio, including CDP injection, Codex page and panel transparency, Shadow DOM review styling, media/slideshow behavior, debugging, packaging, and release verification. Use when changing this repository or investigating a Codex desktop UI surface that does not follow background settings.
+description: Maintains the headless Codex background worker, including CDP injection, Codex page and panel transparency, Shadow DOM review styling, Named Pipe protocol, debugging, packaging, and release verification. Use when changing this repository or investigating a Codex desktop UI surface that does not follow background settings.
 ---
 
 # Codex Background Studio 开发
@@ -26,21 +26,19 @@ description: Maintains Codex Background Studio, including CDP injection, Codex p
 7. 动态组件必须首帧生效。不要依赖 200ms 之后的 MutationObserver 补丁来消除闪烁。
 8. 一次性 CDP 探查脚本放在 `poc/`，验证完立即删除。
 9. 修改 `BACKGROUND_CSS` 或 Shadow CSS 时必须进入修订哈希，确保现有会话热更新。
-10. 更改共享设置时同步修改 contracts、默认值、规范化、UI、payload 和测试。
+10. 更改 display 参数时同步修改 `plugin.json` settingsSchema、`models.rs`、payload 和测试。
 
 ## 代码入口
 
-- `src-tauri/src/lib.rs`：当前 Tauri/Rust 主后端、命令、轮播和共享状态。
-- `src-tauri/src/host.rs`：托盘、窗口生命周期、退出恢复和 Windows 自启动。
+- `src-tauri/src/main.rs` / `worker.rs`：无界面 worker，Tokio runtime、Named Pipe v2、configure 后才接管。
+- `src-tauri/src/plugin_ipc.rs`、`protocol.rs`、`configure.rs`：hello/configure/status/apply/pause/restore/shutdown 与回环媒体校验。
 - `src-tauri/src/controller.rs`：发现官方 Store 包、校验进程、启动 Codex、保存和恢复 CDP 会话。
 - `src-tauri/src/injector.rs`：Rust CDP target 同步、早期脚本、运行时更新、暂停和移除。
-- `src-tauri/src/media.rs`、`network.rs`、`preview.rs`、`settings.rs`：媒体、安全下载、预览和事务设置。
+- `src-tauri/src/managed_launch.rs`：未配置不杀进程；配置后才允许 Attach/Takeover。
 - `src-tauri/build.rs`、`src-tauri/src/payload.rs`：从 TypeScript 提取共享 payload 并生成 Rust 资源。
 - `src/main/payload.ts`：Codex 页面背景层、CSS 变量、页面选择器、Shadow DOM 和清理逻辑。
-- `src/shared/contracts.ts`、`src-tauri/src/models.rs`：前端和 Rust 对应的数据契约。
-- `src/renderer/bridge.ts`：Tauri `invoke` 主桥，同时保留 Electron 备份桥。
-- `src/renderer/App.tsx`：Studio 操作界面和设置控件。
-- `src/main/*`：0.3.0 以前的 Electron 历史实现；0.4.0 起已废弃且不再参与构建。
+- `src-tauri/src/models.rs`：display 参数与范围。
+- `plugin.json`：壳读取的 manifest、capabilities、settingsSchema。
 
 ## 标准开发流程
 
@@ -50,11 +48,11 @@ description: Maintains Codex Background Studio, including CDP injection, Codex p
 
 ```powershell
 git status --short --branch
-npm run check
+cargo fmt --manifest-path src-tauri/Cargo.toml
+cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-开发要求 Node.js 22+、Rust stable 和 MSVC C++ Build Tools。JavaScript 使用 npm，
-Rust 使用 Cargo，不要手工编造依赖版本。
+开发要求 Rust stable 和 MSVC C++ Build Tools。Rust 使用 Cargo，不要手工编造依赖版本。
 
 ### 2. 复现并确定视觉层
 
@@ -116,7 +114,7 @@ Codex 主壳完成挂载。
 ### 6. 验证
 
 ```powershell
-npm run check
+cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
 随后使用真实 Codex 验证：
@@ -135,18 +133,16 @@ npm run check
 
 补丁修复递增 patch 版本；功能或设置结构变化再考虑 minor 版本。同步修改：
 
-- `package.json`
-- `package-lock.json` 根版本和 packages 根版本
+- `src-tauri/Cargo.toml`
 
 ```powershell
-npm run check
-npm run package:win
+cargo fmt --manifest-path src-tauri/Cargo.toml
+cargo test --manifest-path src-tauri/Cargo.toml
+cargo build --release --manifest-path src-tauri/Cargo.toml
 ```
 
-安装包位于
-`src-tauri/target/release/bundle/nsis/Codex Background Studio_<version>_x64-setup.exe`。
-开发、构建和 `package:win` 都只走 Tauri。Electron 命令仅以
-`package.json#legacyElectronScripts` 元数据保存，不是可执行 npm scripts。
+发布产物是 `CodexBackgroundStudio-<version>-plugin.zip`，内含
+`Codex Background Studio.exe` 和 `plugin.json`。不再生成 NSIS。
 
 ### 8. 提交和传输
 
@@ -158,7 +154,7 @@ npm run package:win
 - 目标页面视觉结果符合对应透明度控制；
 - 没有透明度叠加、原生渐变、阴影或首帧闪烁；
 - 真实 Codex 验证完成；
-- `npm run check` 全部通过；
+- `cargo test --manifest-path src-tauri/Cargo.toml` 全部通过；
 - 临时探查文件已删除；
-- 安装包版本正确且可读取；
+- plugin.zip 版本正确且可被壳读取；
 - 恢复流程仍完整可逆。

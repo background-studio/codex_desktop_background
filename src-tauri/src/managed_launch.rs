@@ -7,6 +7,7 @@ pub const MSG_TAKING_OVER: &str = "正在接管 Codex";
 pub const MSG_WAIT_DEBUG: &str = "正在等待 Codex 调试端口就绪";
 pub const MSG_DEBUG_TIMEOUT: &str = "Codex 调试端口未能在 45 秒内就绪，等待进程退出后重试";
 pub const MSG_NEED_MEDIA: &str = "请先选择背景后再接管 Codex";
+pub const MSG_UNCONFIGURED: &str = "尚未配置背景";
 pub const MSG_AUTO_APPLIED: &str = "背景已自动应用";
 pub const MSG_SUSPENDED: &str = "暂停托管";
 

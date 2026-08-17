@@ -372,9 +372,8 @@ background-image（不要只匹配带 `via-` 的）；同时清胶囊 border/sha
 
 ### 推荐
 
-- 先 `npm run dev` 调试 Tauri Studio。
-- 只看 Studio UI 时用 `npm run dev:web`。
-- 用一次性 Node `.mjs` 或忽略的 Rust live test 连接 Codex CDP。
+- 用 `cargo test --manifest-path src-tauri/Cargo.toml` 跑 worker 单测。
+- 用忽略的 Rust live test 连接 Codex CDP。
 - 把 DOM、计算样式和截图作为证据。
 - 对动态页面测试导航后、滚动后、重载后状态。
 
@@ -389,11 +388,7 @@ background-image（不要只匹配带 `via-` 的）；同时清胶囊 border/sha
 
 ## 测试和发布
 
-`npm run check` 包含：
-
-- renderer TypeScript；
-- main/preload TypeScript；
-- Vitest。
+`cargo test --manifest-path src-tauri/Cargo.toml` 覆盖协议、媒体校验、payload 和托管状态机。
 
 payload 测试至少应断言：
 
@@ -407,10 +402,9 @@ payload 测试至少应断言：
 发布前：
 
 1. 删除 `poc/` 一次性文件。
-2. 跑 `npm run check`。
+2. 跑 `cargo fmt` 和 `cargo test --manifest-path src-tauri/Cargo.toml`。
 3. 在真实 Codex 完成页面矩阵验证。
-4. 更新 package 与 lock 版本。
-5. 跑 `npm run package:win`。
-6. 检查安装包大小和 SHA256。
-7. 查看 Git 完整 diff。
-8. 用户明确同意后提交、推送。
+4. 更新 `src-tauri/Cargo.toml` 版本。
+5. 确认 `plugin.json` 的 exeName/pipeName 仍与壳 catalog 兼容。
+6. 查看 Git 完整 diff。
+7. 用户明确同意后提交、推送。
