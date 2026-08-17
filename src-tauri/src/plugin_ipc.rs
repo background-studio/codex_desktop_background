@@ -75,11 +75,7 @@ async fn handle_client(
 ) -> Result<(), String> {
     let (reader, mut writer) = tokio::io::split(client);
     let mut lines = BufReader::new(reader).lines();
-    while let Some(line) = lines
-        .next_line()
-        .await
-        .map_err(|error| error.to_string())?
-    {
+    while let Some(line) = lines.next_line().await.map_err(|error| error.to_string())? {
         let line = line.trim().to_string();
         if line.is_empty() {
             continue;
@@ -142,10 +138,12 @@ fn status_payload(app: &AppHandle) -> Result<serde_json::Value, String> {
 
 async fn apply_via_ipc(app: AppHandle) -> Result<serde_json::Value, String> {
     let state = app.state::<StudioState>();
-    let payload = {
-        let state = app.state::<StudioState>();
-        state.active_payload()?
-    };
+    let app_for_payload = app.clone();
+    let payload = tauri::async_runtime::spawn_blocking(move || {
+        app_for_payload.state::<StudioState>().active_payload()
+    })
+    .await
+    .map_err(|error| error.to_string())??;
     let controller = std::sync::Arc::clone(&state.controller);
     let first_payload = payload.clone();
     let first = tauri::async_runtime::spawn_blocking(move || {
@@ -173,7 +171,9 @@ async fn apply_via_ipc(app: AppHandle) -> Result<serde_json::Value, String> {
 
 async fn pause_via_ipc(app: AppHandle) -> Result<serde_json::Value, String> {
     let state = app.state::<StudioState>();
-    state.live_apply_generation.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    state
+        .live_apply_generation
+        .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     let controller = std::sync::Arc::clone(&state.controller);
     tauri::async_runtime::spawn_blocking(move || lock(&controller)?.pause())
         .await
@@ -184,7 +184,9 @@ async fn pause_via_ipc(app: AppHandle) -> Result<serde_json::Value, String> {
 
 async fn restore_via_ipc(app: AppHandle) -> Result<serde_json::Value, String> {
     let state = app.state::<StudioState>();
-    state.live_apply_generation.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    state
+        .live_apply_generation
+        .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     let controller = std::sync::Arc::clone(&state.controller);
     tauri::async_runtime::spawn_blocking(move || lock(&controller)?.restore())
         .await

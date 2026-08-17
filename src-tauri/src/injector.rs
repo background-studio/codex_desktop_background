@@ -88,8 +88,16 @@ fn validate_websocket_url(
 }
 
 fn fetch_json<T: for<'de> Deserialize<'de>>(port: u16, resource: &str) -> Result<T, String> {
+    fetch_json_with_timeout(port, resource, Duration::from_secs(3))
+}
+
+fn fetch_json_with_timeout<T: for<'de> Deserialize<'de>>(
+    port: u16,
+    resource: &str,
+    timeout: Duration,
+) -> Result<T, String> {
     let response = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(3))
+        .timeout(timeout)
         .no_proxy()
         .build()
         .map_err(|error| error.to_string())?
@@ -109,7 +117,15 @@ fn fetch_json<T: for<'de> Deserialize<'de>>(port: u16, resource: &str) -> Result
 }
 
 pub fn read_browser_identity(port: u16) -> Result<String, String> {
-    let version: CdpVersion = fetch_json(port, "/json/version")?;
+    read_browser_identity_with_timeout(port, Duration::from_secs(3))
+}
+
+pub fn probe_browser_identity(port: u16) -> Result<String, String> {
+    read_browser_identity_with_timeout(port, Duration::from_millis(400))
+}
+
+fn read_browser_identity_with_timeout(port: u16, timeout: Duration) -> Result<String, String> {
+    let version: CdpVersion = fetch_json_with_timeout(port, "/json/version", timeout)?;
     let websocket =
         validate_websocket_url(&version.web_socket_debugger_url, port, "browser", None)?;
     let url = Url::parse(&websocket).map_err(|error| error.to_string())?;
@@ -628,6 +644,13 @@ impl InjectorEngine {
 
     pub fn active_targets(&self) -> u32 {
         self.target_count.load(Ordering::Relaxed) as u32
+    }
+
+    pub fn is_connected(&self) -> bool {
+        let Ok(inner) = self.inner.lock() else {
+            return false;
+        };
+        probe_browser_identity(inner.port).ok().as_deref() == Some(inner.browser_id.as_str())
     }
 }
 

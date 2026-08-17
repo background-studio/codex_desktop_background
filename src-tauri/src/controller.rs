@@ -15,7 +15,14 @@ use serde_json::Value;
 use wait_timeout::ChildExt;
 
 use crate::{
-    injector::{read_browser_identity, InjectorEngine},
+    injector::{probe_browser_identity, read_browser_identity, InjectorEngine},
+    managed_launch::{
+        candidate_still_present, debug_ports_from_records, has_remote_debugging_arg,
+        snapshot_matching_processes, snapshot_matching_records, HostedAction, HostedInput,
+        HostedMachine, ProcessKey, ProcessRecord, MSG_AUTO_APPLIED, MSG_DEBUG_TIMEOUT,
+        MSG_EXISTING, MSG_NEED_MEDIA, MSG_SUSPENDED, MSG_TAKING_OVER, MSG_WAITING, MSG_WAIT_DEBUG,
+        PHASE_ACTIVE, PHASE_BLOCKED, PHASE_ERROR, PHASE_PAUSED, PHASE_STARTING, PHASE_WAITING,
+    },
     models::RuntimeStatus,
     payload::ActivePayload,
     settings::write_json_transaction,
@@ -169,35 +176,19 @@ fn discover_codex() -> Result<CodexInstall, String> {
     Ok(install)
 }
 
+fn matching_records(install: &CodexInstall) -> Result<Vec<ProcessRecord>, String> {
+    snapshot_matching_records(&install.executable)
+}
+
+fn matching_processes(install: &CodexInstall) -> Result<Vec<ProcessKey>, String> {
+    snapshot_matching_processes(&install.executable)
+}
+
 fn process_ids_for(install: &CodexInstall) -> Result<Vec<u32>, String> {
-    let script = format!(
-        r#"
-$target = {}
-$ids = @(Get-CimInstance Win32_Process -Filter "Name='ChatGPT.exe'" | Where-Object {{
-  $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath).Equals($target, [StringComparison]::OrdinalIgnoreCase)
-}} | ForEach-Object {{ [int]$_.ProcessId }})
-@($ids) | ConvertTo-Json -Compress
-"#,
-        powershell_quote(&normalized_path(&install.executable))
-    );
-    let raw = run_powershell(&script, Duration::from_secs(30))?;
-    if raw.is_empty() {
-        return Ok(Vec::new());
-    }
-    let value: Value = serde_json::from_str(&raw).map_err(|error| error.to_string())?;
-    Ok(match value {
-        Value::Array(values) => values
-            .into_iter()
-            .filter_map(|value| value.as_u64())
-            .filter_map(|value| u32::try_from(value).ok())
-            .collect(),
-        Value::Number(value) => value
-            .as_u64()
-            .and_then(|value| u32::try_from(value).ok())
-            .into_iter()
-            .collect(),
-        _ => Vec::new(),
-    })
+    Ok(matching_processes(install)?
+        .into_iter()
+        .map(|process| process.pid)
+        .collect())
 }
 
 fn debug_ports_for(install: &CodexInstall) -> Result<Vec<u16>, String> {
@@ -314,11 +305,34 @@ fn select_port(preferred: u16) -> Result<u16, String> {
     Err("无法为 Codex 分配本机调试端口。".to_string())
 }
 
+pub struct ManagedDecision {
+    pub action: HostedAction,
+    pub candidate: Vec<ProcessKey>,
+}
+
+impl ManagedDecision {
+    fn from_action(action: HostedAction) -> Self {
+        Self {
+            action,
+            candidate: Vec::new(),
+        }
+    }
+}
+
 pub struct CodexController {
     state_path: PathBuf,
     engine: Option<InjectorEngine>,
     state: Option<RuntimeState>,
     status: RuntimeStatus,
+    hosted: HostedMachine,
+    install: Option<CodexInstall>,
+    empty_ticks: u32,
+    health_ticks: u32,
+    debug_ports_cache: Vec<u16>,
+    debug_ports_generation: Option<u64>,
+    debug_ports_refresh_ticks: u32,
+    debug_ports_refresh_count: u32,
+    last_probe_error_ticks: u32,
 }
 
 impl CodexController {
@@ -333,6 +347,15 @@ impl CodexController {
             engine: None,
             state,
             status: RuntimeStatus::default(),
+            hosted: HostedMachine::new(),
+            install: None,
+            empty_ticks: 0,
+            health_ticks: 0,
+            debug_ports_cache: Vec::new(),
+            debug_ports_generation: None,
+            debug_ports_refresh_ticks: 0,
+            debug_ports_refresh_count: 0,
+            last_probe_error_ticks: 0,
         }
     }
 
@@ -370,11 +393,445 @@ impl CodexController {
         true
     }
 
+    fn drop_engine(&mut self) {
+        if let Some(mut engine) = self.engine.take() {
+            let _ = engine.stop();
+        }
+    }
+
+    fn cached_install(&mut self, processes_empty: bool) -> Result<CodexInstall, String> {
+        let rediscover = self.install.is_none()
+            || (processes_empty && self.empty_ticks > 0 && self.empty_ticks % 20 == 0);
+        if rediscover {
+            self.install = Some(discover_codex()?);
+        }
+        self.install
+            .clone()
+            .ok_or_else(|| "未找到经过验证的官方 OpenAI.Codex Store 应用。".to_string())
+    }
+
+    fn current_keys(&self, install: &CodexInstall) -> Result<Vec<ProcessKey>, String> {
+        matching_processes(install)
+    }
+
+    fn mark_managed(&mut self, install: &CodexInstall) {
+        if !self.hosted.is_armed() {
+            return;
+        }
+        let keys = self.current_keys(install).unwrap_or_default();
+        self.hosted.rearm_after_apply(&keys);
+    }
+
+    fn set_status(
+        &mut self,
+        phase: &str,
+        message: &str,
+        version: Option<String>,
+        error: Option<String>,
+    ) {
+        self.status.phase = phase.to_string();
+        self.status.message = message.to_string();
+        if version.is_some() {
+            self.status.codex_version = version;
+        }
+        self.status.last_error = error;
+    }
+
+    fn attach_existing(
+        &mut self,
+        install: &CodexInstall,
+        payload: &ActivePayload,
+    ) -> Result<bool, String> {
+        if let Some(engine) = &self.engine {
+            if engine.is_connected() {
+                engine.update(payload.clone())?;
+                return Ok(true);
+            }
+            self.drop_engine();
+        }
+        if self.try_attach_saved(install) {
+            self.engine
+                .as_mut()
+                .expect("engine set after attach")
+                .start(payload.clone())?;
+            return Ok(true);
+        }
+        for port in debug_ports_for(install)? {
+            let Ok(browser_id) = read_browser_identity(port) else {
+                continue;
+            };
+            self.write_state(Some(RuntimeState {
+                schema_version: 1,
+                port,
+                browser_id: browser_id.clone(),
+                package_full_name: install.package_full_name.clone(),
+                executable: install.executable.clone(),
+                created_at: Utc::now().to_rfc3339(),
+            }))?;
+            let mut engine = InjectorEngine::new(port, browser_id);
+            engine.start(payload.clone())?;
+            self.engine = Some(engine);
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    fn launch_debug_session(
+        &mut self,
+        install: &CodexInstall,
+        payload: ActivePayload,
+    ) -> Result<(), String> {
+        if !process_ids_for(install)?.is_empty() {
+            stop_verified_codex(install)?;
+        }
+        let port = select_port(9335)?;
+        launch_codex(
+            install,
+            &[
+                "--remote-debugging-address=127.0.0.1".to_string(),
+                format!("--remote-debugging-port={port}"),
+            ],
+        )?;
+        let deadline = Instant::now() + Duration::from_secs(45);
+        let browser_id = loop {
+            if let Ok(identity) = read_browser_identity(port) {
+                break identity;
+            }
+            if Instant::now() >= deadline {
+                return Err("Codex 未能在 45 秒内打开安全的本机调试端口。".to_string());
+            }
+            thread::sleep(Duration::from_millis(400));
+        };
+        self.write_state(Some(RuntimeState {
+            schema_version: 1,
+            port,
+            browser_id: browser_id.clone(),
+            package_full_name: install.package_full_name.clone(),
+            executable: install.executable.clone(),
+            created_at: Utc::now().to_rfc3339(),
+        }))?;
+        let mut engine = InjectorEngine::new(port, browser_id);
+        engine.start(payload)?;
+        self.engine = Some(engine);
+        Ok(())
+    }
+
+    fn release_stale_session(&mut self) -> Result<(), String> {
+        self.drop_engine();
+        self.write_state(None)?;
+        self.debug_ports_cache.clear();
+        self.debug_ports_generation = None;
+        self.debug_ports_refresh_ticks = 0;
+        self.debug_ports_refresh_count = 0;
+        self.hosted.reset_to_waiting();
+        self.status.active_targets = 0;
+        Ok(())
+    }
+
+    fn apply_status_for_attach(
+        &mut self,
+        install: &CodexInstall,
+        automatic: bool,
+        live_update: bool,
+    ) {
+        let message = if automatic {
+            MSG_AUTO_APPLIED
+        } else if live_update {
+            "背景已实时应用"
+        } else {
+            "已重新连接背景会话"
+        };
+        self.set_status(PHASE_ACTIVE, message, Some(install.version.clone()), None);
+        self.mark_managed(install);
+    }
+
+    fn refresh_debug_ports(
+        &mut self,
+        install: &CodexInstall,
+        records: &[ProcessRecord],
+    ) -> Vec<u16> {
+        let generation = records.iter().map(|record| record.key.created_at).min();
+        let native_ports = debug_ports_from_records(records);
+        let cmdline_unknown = records.iter().any(|record| record.command_line.is_none());
+        if self.debug_ports_generation != generation {
+            self.debug_ports_generation = generation;
+            self.debug_ports_cache = native_ports.clone();
+            self.debug_ports_refresh_ticks = 0;
+            self.debug_ports_refresh_count = 0;
+        } else if !native_ports.is_empty() {
+            self.debug_ports_cache = native_ports;
+        } else if self.debug_ports_cache.is_empty() && cmdline_unknown {
+            self.debug_ports_refresh_ticks = self.debug_ports_refresh_ticks.saturating_add(1);
+            if self.debug_ports_refresh_ticks % 4 == 0 && self.debug_ports_refresh_count < 8 {
+                self.debug_ports_refresh_count = self.debug_ports_refresh_count.saturating_add(1);
+                if let Ok(ports) = debug_ports_for(install) {
+                    self.debug_ports_cache = ports;
+                }
+            }
+        }
+        self.debug_ports_cache.clone()
+    }
+
+    pub fn probe_managed(&mut self) -> Result<ManagedDecision, String> {
+        if self.hosted.is_paused() {
+            self.set_status(PHASE_PAUSED, MSG_SUSPENDED, None, None);
+            return Ok(ManagedDecision::from_action(HostedAction::StaySuspended));
+        }
+
+        let cached_empty = match &self.install {
+            Some(install) => match matching_records(install) {
+                Ok(records) => records.is_empty(),
+                Err(_) => true,
+            },
+            None => true,
+        };
+        if cached_empty {
+            self.empty_ticks = self.empty_ticks.saturating_add(1);
+        } else {
+            self.empty_ticks = 0;
+        }
+
+        let install = match self.cached_install(cached_empty) {
+            Ok(install) => {
+                self.last_probe_error_ticks = 0;
+                install
+            }
+            Err(error) => {
+                self.last_probe_error_ticks = self.last_probe_error_ticks.saturating_add(1);
+                if self.status.phase == PHASE_ACTIVE
+                    && !self
+                        .engine
+                        .as_ref()
+                        .is_some_and(InjectorEngine::is_connected)
+                {
+                    self.drop_engine();
+                    self.set_status(PHASE_WAITING, MSG_WAITING, None, None);
+                } else if self.status.phase != PHASE_ACTIVE {
+                    self.set_status(PHASE_ERROR, &error, None, Some(error.clone()));
+                }
+                return Ok(ManagedDecision::from_action(HostedAction::Wait));
+            }
+        };
+
+        let records = match matching_records(&install) {
+            Ok(records) => {
+                self.last_probe_error_ticks = 0;
+                records
+            }
+            Err(error) => {
+                self.last_probe_error_ticks = self.last_probe_error_ticks.saturating_add(1);
+                if !self
+                    .engine
+                    .as_ref()
+                    .is_some_and(InjectorEngine::is_connected)
+                {
+                    self.drop_engine();
+                    if self.status.phase == PHASE_ACTIVE || self.last_probe_error_ticks >= 3 {
+                        self.set_status(PHASE_WAITING, MSG_WAITING, Some(install.version), None);
+                    } else if self.status.phase != PHASE_ACTIVE {
+                        self.set_status(
+                            PHASE_WAITING,
+                            &format!("进程探测暂时失败：{error}"),
+                            Some(install.version),
+                            None,
+                        );
+                    }
+                }
+                return Ok(ManagedDecision::from_action(HostedAction::Wait));
+            }
+        };
+        let keys = records.iter().map(|record| record.key).collect::<Vec<_>>();
+        let mut connected = false;
+        if keys.is_empty() {
+            if self.engine.is_some() {
+                self.drop_engine();
+            }
+        } else if self.engine.is_some() {
+            self.health_ticks = self.health_ticks.saturating_add(1);
+            connected = if self.health_ticks % 6 == 0 {
+                let live = self
+                    .engine
+                    .as_ref()
+                    .is_some_and(InjectorEngine::is_connected);
+                if !live {
+                    self.drop_engine();
+                }
+                live
+            } else {
+                true
+            };
+        }
+
+        let mut has_ready_debug_session = false;
+        let mut debug_starting = false;
+        let mut cmdline_pending = false;
+        if !keys.is_empty() && !connected {
+            if let Some(state) = &self.state {
+                if probe_browser_identity(state.port).ok().as_deref()
+                    == Some(state.browser_id.as_str())
+                {
+                    has_ready_debug_session = true;
+                }
+            }
+            if !has_ready_debug_session {
+                let ports = self.refresh_debug_ports(&install, &records);
+                if ports
+                    .iter()
+                    .any(|port| probe_browser_identity(*port).is_ok())
+                {
+                    has_ready_debug_session = true;
+                } else {
+                    let has_debug_arg = records.iter().any(|record| {
+                        record
+                            .command_line
+                            .as_deref()
+                            .is_some_and(has_remote_debugging_arg)
+                    });
+                    let cmdline_unknown =
+                        records.iter().any(|record| record.command_line.is_none());
+                    debug_starting = has_debug_arg || !ports.is_empty();
+                    cmdline_pending = cmdline_unknown && !has_debug_arg && ports.is_empty();
+                }
+            }
+        }
+
+        let decision = self.hosted.decide(&HostedInput {
+            processes: keys,
+            connected,
+            has_ready_debug_session,
+            debug_starting,
+            cmdline_pending,
+            now: Instant::now(),
+        });
+        match decision.action {
+            HostedAction::Wait => {
+                self.set_status(PHASE_WAITING, MSG_WAITING, Some(install.version), None);
+            }
+            HostedAction::ReportExistingUnmanaged => {
+                if self.status.message == MSG_NEED_MEDIA {
+                    self.set_status(
+                        PHASE_BLOCKED,
+                        MSG_NEED_MEDIA,
+                        Some(install.version),
+                        self.status.last_error.clone(),
+                    );
+                } else {
+                    self.set_status(
+                        PHASE_BLOCKED,
+                        MSG_EXISTING,
+                        Some(install.version),
+                        self.status.last_error.clone(),
+                    );
+                }
+            }
+            HostedAction::WaitForDebug => {
+                self.set_status(PHASE_WAITING, MSG_WAIT_DEBUG, Some(install.version), None);
+            }
+            HostedAction::ReportDebugTimeout => {
+                self.set_status(
+                    PHASE_ERROR,
+                    MSG_DEBUG_TIMEOUT,
+                    Some(install.version),
+                    Some(MSG_DEBUG_TIMEOUT.to_string()),
+                );
+            }
+            HostedAction::Attach | HostedAction::Takeover => {
+                self.set_status(PHASE_STARTING, MSG_TAKING_OVER, Some(install.version), None);
+            }
+            HostedAction::KeepActive => {
+                self.status.phase = PHASE_ACTIVE.to_string();
+                self.status.codex_version = Some(install.version);
+                self.status.last_error = None;
+            }
+            HostedAction::CleanupDisconnected => {
+                self.release_stale_session()?;
+                self.set_status(PHASE_WAITING, MSG_WAITING, Some(install.version), None);
+            }
+            HostedAction::StaySuspended => {
+                self.set_status(PHASE_PAUSED, MSG_SUSPENDED, Some(install.version), None);
+            }
+        }
+        Ok(ManagedDecision {
+            action: decision.action,
+            candidate: decision.candidate,
+        })
+    }
+
+    pub fn try_attach(&mut self, payload: ActivePayload) -> Result<bool, String> {
+        if self.hosted.is_paused() {
+            return Ok(false);
+        }
+        self.set_status(PHASE_STARTING, MSG_TAKING_OVER, None, None);
+        let install = self.cached_install(false).or_else(|_| discover_codex())?;
+        self.install = Some(install.clone());
+        match self.attach_existing(&install, &payload) {
+            Ok(true) => {
+                self.apply_status_for_attach(&install, true, true);
+                Ok(true)
+            }
+            Ok(false) => Ok(false),
+            Err(error) => {
+                self.drop_engine();
+                let keys = matching_processes(&install).unwrap_or_default();
+                self.hosted.note_takeover_failed(&keys);
+                self.set_status(PHASE_ERROR, &error, None, Some(error.clone()));
+                Err(error)
+            }
+        }
+    }
+
+    pub fn note_payload_unavailable(&mut self, error: &str) -> Result<(), String> {
+        let keys = self
+            .install
+            .as_ref()
+            .and_then(|install| matching_processes(install).ok())
+            .unwrap_or_default();
+        if !keys.is_empty() {
+            self.hosted.note_takeover_failed(&keys);
+        }
+        if error.contains("请先从媒体库选择") {
+            self.set_status(PHASE_BLOCKED, MSG_NEED_MEDIA, None, None);
+        } else {
+            self.set_status(PHASE_ERROR, error, None, Some(error.to_string()));
+        }
+        Ok(())
+    }
+
+    pub fn run_managed_action(&mut self, payload: ActivePayload) -> Result<(), String> {
+        if self.hosted.is_paused() {
+            return Ok(());
+        }
+        let decision = self.probe_managed()?;
+        match decision.action {
+            HostedAction::Attach => self.try_attach(payload).map(|_| ()),
+            HostedAction::Takeover => {
+                if decision.candidate.is_empty() {
+                    return Ok(());
+                }
+                let current = self
+                    .install
+                    .as_ref()
+                    .and_then(|install| matching_processes(install).ok())
+                    .unwrap_or_default();
+                if current.is_empty() || !candidate_still_present(&decision.candidate, &current) {
+                    return Ok(());
+                }
+                self.takeover(payload).map(|_| ())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    pub fn takeover(&mut self, payload: ActivePayload) -> Result<RuntimeStatus, String> {
+        self.apply_inner(payload, true, true)
+    }
+
     pub fn reconnect_saved(&mut self, payload: ActivePayload) -> Result<bool, String> {
         if self.state.is_none() {
             return Ok(false);
         }
         let install = discover_codex()?;
+        self.install = Some(install.clone());
         if !self.try_attach_saved(&install) {
             self.write_state(None)?;
             self.status = RuntimeStatus::default();
@@ -387,17 +844,13 @@ impl CodexController {
             .start(payload);
         match result {
             Ok(()) => {
-                self.status.phase = "active".to_string();
+                self.apply_status_for_attach(&install, true, true);
                 self.status.message = "已自动恢复背景会话".to_string();
-                self.status.codex_version = Some(install.version);
-                self.status.last_error = None;
                 Ok(true)
             }
             Err(error) => {
-                self.engine = None;
-                self.status.phase = "error".to_string();
-                self.status.message = error.clone();
-                self.status.last_error = Some(error.clone());
+                self.drop_engine();
+                self.set_status(PHASE_ERROR, &error, None, Some(error.clone()));
                 Err(error)
             }
         }
@@ -408,96 +861,78 @@ impl CodexController {
         payload: ActivePayload,
         restart_existing: bool,
     ) -> Result<RuntimeStatus, String> {
-        self.status.phase = "starting".to_string();
-        self.status.message = "正在连接 Codex".to_string();
-        self.status.last_error = None;
+        self.apply_inner(payload, restart_existing, false)
+    }
+
+    fn apply_inner(
+        &mut self,
+        payload: ActivePayload,
+        restart_existing: bool,
+        automatic: bool,
+    ) -> Result<RuntimeStatus, String> {
+        self.set_status(
+            PHASE_STARTING,
+            if automatic {
+                MSG_TAKING_OVER
+            } else {
+                "正在连接 Codex"
+            },
+            None,
+            None,
+        );
         let result: Result<RuntimeStatus, String> = (|| {
             let install = discover_codex()?;
-            if let Some(engine) = &self.engine {
-                engine.update(payload)?;
-                self.status.phase = "active".to_string();
-                self.status.message = "背景已实时应用".to_string();
-                self.status.codex_version = Some(install.version);
-                return Ok(self.status());
-            }
-            if self.try_attach_saved(&install) {
-                self.engine
-                    .as_mut()
-                    .expect("engine set after attach")
-                    .start(payload)?;
-                self.status.phase = "active".to_string();
-                self.status.message = "已重新连接背景会话".to_string();
-                self.status.codex_version = Some(install.version);
-                return Ok(self.status());
-            }
-            for port in debug_ports_for(&install)? {
-                let Ok(browser_id) = read_browser_identity(port) else {
-                    continue;
-                };
-                self.write_state(Some(RuntimeState {
-                    schema_version: 1,
-                    port,
-                    browser_id: browser_id.clone(),
-                    package_full_name: install.package_full_name.clone(),
-                    executable: install.executable.clone(),
-                    created_at: Utc::now().to_rfc3339(),
-                }))?;
-                let mut engine = InjectorEngine::new(port, browser_id);
-                engine.start(payload.clone())?;
-                self.engine = Some(engine);
-                self.status.phase = "active".to_string();
-                self.status.message = "已重新连接背景会话".to_string();
-                self.status.codex_version = Some(install.version);
+            self.install = Some(install.clone());
+            let live_update = self
+                .engine
+                .as_ref()
+                .is_some_and(InjectorEngine::is_connected);
+            if self.attach_existing(&install, &payload)? {
+                self.apply_status_for_attach(&install, automatic, live_update);
                 return Ok(self.status());
             }
             let running = process_ids_for(&install)?;
             if !running.is_empty() && !restart_existing {
                 return Err("Codex 需要重启一次以启用背景。".to_string());
             }
-            if !running.is_empty() {
-                stop_verified_codex(&install)?;
-            }
-            let port = select_port(9335)?;
-            launch_codex(
-                &install,
-                &[
-                    "--remote-debugging-address=127.0.0.1".to_string(),
-                    format!("--remote-debugging-port={port}"),
-                ],
-            )?;
-            let deadline = Instant::now() + Duration::from_secs(45);
-            let browser_id = loop {
-                if let Ok(identity) = read_browser_identity(port) {
-                    break identity;
-                }
-                if Instant::now() >= deadline {
-                    return Err("Codex 未能在 45 秒内打开安全的本机调试端口。".to_string());
-                }
-                thread::sleep(Duration::from_millis(400));
-            };
-            self.write_state(Some(RuntimeState {
-                schema_version: 1,
-                port,
-                browser_id: browser_id.clone(),
-                package_full_name: install.package_full_name,
-                executable: install.executable,
-                created_at: Utc::now().to_rfc3339(),
-            }))?;
-            let mut engine = InjectorEngine::new(port, browser_id);
-            engine.start(payload)?;
-            self.engine = Some(engine);
-            self.status.phase = "active".to_string();
-            self.status.message = "背景已应用".to_string();
-            self.status.codex_version = Some(install.version);
+            self.launch_debug_session(&install, payload)?;
+            self.set_status(
+                PHASE_ACTIVE,
+                if automatic {
+                    MSG_AUTO_APPLIED
+                } else {
+                    "背景已应用"
+                },
+                Some(install.version.clone()),
+                None,
+            );
+            self.mark_managed(&install);
             Ok(self.status())
         })();
         if let Err(error) = &result {
+            let keys = self
+                .install
+                .as_ref()
+                .and_then(|install| matching_processes(install).ok())
+                .unwrap_or_default();
+            if automatic && !keys.is_empty() {
+                self.hosted.note_takeover_failed(&keys);
+            }
             self.status.phase = if error.contains("需要重启一次") {
-                "idle".to_string()
+                if self.hosted.is_armed() {
+                    PHASE_BLOCKED.to_string()
+                } else {
+                    "idle".to_string()
+                }
             } else {
-                "error".to_string()
+                PHASE_ERROR.to_string()
             };
-            self.status.message = error.clone();
+            self.status.message = if error.contains("需要重启一次") && self.hosted.is_armed()
+            {
+                MSG_EXISTING.to_string()
+            } else {
+                error.clone()
+            };
             self.status.last_error = Some(error.clone());
         }
         result
@@ -507,9 +942,12 @@ impl CodexController {
         if let Some(engine) = &self.engine {
             engine.pause()?;
         }
-        self.status.phase = "paused".to_string();
-        self.status.message = "背景已暂停".to_string();
-        self.status.last_error = None;
+        self.hosted.suspend();
+        if self.hosted.is_armed() {
+            self.set_status(PHASE_PAUSED, MSG_SUSPENDED, None, None);
+        } else {
+            self.set_status("paused", "背景已暂停", None, None);
+        }
         Ok(self.status())
     }
 
@@ -517,26 +955,27 @@ impl CodexController {
         self.status.phase = "restoring".to_string();
         self.status.message = "正在恢复官方外观".to_string();
         self.status.last_error = None;
+        let hosted = self.hosted.is_armed();
         let result: Result<RuntimeStatus, String> = (|| {
-            if let Some(mut engine) = self.engine.take() {
-                engine.stop()?;
-            }
+            self.drop_engine();
             let install = discover_codex()?;
+            self.install = Some(install.clone());
             if !process_ids_for(&install)?.is_empty() {
                 stop_verified_codex(&install)?;
                 launch_codex(&install, &[])?;
             }
             self.write_state(None)?;
-            self.status.phase = "idle".to_string();
-            self.status.message = "已恢复官方外观".to_string();
-            self.status.codex_version = Some(install.version);
+            self.hosted.suspend();
+            if hosted {
+                self.set_status(PHASE_PAUSED, MSG_SUSPENDED, Some(install.version), None);
+            } else {
+                self.set_status("idle", "已恢复官方外观", Some(install.version), None);
+            }
             self.status.active_targets = 0;
             Ok(self.status())
         })();
         if let Err(error) = &result {
-            self.status.phase = "error".to_string();
-            self.status.message = error.clone();
-            self.status.last_error = Some(error.clone());
+            self.set_status(PHASE_ERROR, error, None, Some(error.clone()));
         }
         result
     }

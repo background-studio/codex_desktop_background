@@ -1,6 +1,6 @@
 {
   "name": "codex-background-studio",
-  "version": "0.5.3",
+  "version": "0.5.4-beta.1",
   "private": true,
   "description": "A reversible background manager for the Codex Windows desktop app.",
   "author": "Codex Background Studio contributors",

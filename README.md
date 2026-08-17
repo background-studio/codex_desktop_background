@@ -11,6 +11,8 @@
 [Background Studio 壳](https://github.com/background-studio/background-studio) 的插件
 （`--plugin` + `*-plugin.zip`，见 [docs/plugin-protocol.md](./docs/plugin-protocol.md)）。
 
+以 `--plugin` 交给壳托管时，不会自动打开 Codex。用户照常从开始菜单启动官方程序后，插件按完整可执行路径确认新进程，再以 AppUserModelId 带本机调试参数重启并自动应用上次背景。启用前已经在跑的普通 Codex 不会被静默关掉，需要在壳里点一次手动接管。暂停或恢复官方外观会停掉这次进程里的自动接管，直到再次手动应用。独立运行时行为不变。
+
 一个面向 Windows 官方 Codex 桌面应用的独立背景管理器。它通过本机回环
 Chromium DevTools Protocol 动态加载背景，不修改 `WindowsApps`、
 `app.asar`、应用签名、登录状态或对话数据。

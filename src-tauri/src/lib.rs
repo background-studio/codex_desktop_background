@@ -1,6 +1,7 @@
 mod controller;
 mod host;
 mod injector;
+mod managed_launch;
 mod media;
 mod models;
 mod network;
@@ -20,10 +21,11 @@ use std::{
 };
 
 use controller::CodexController;
+use managed_launch::HostedAction;
 use media::MediaLibrary;
 use models::{
-    AppSnapshot, ApplyRequest, DownloadRequest, ImportResult, MediaItem, SettingsPatch,
-    RuntimeStatus, SkippedImport,
+    AppSnapshot, ApplyRequest, DownloadRequest, ImportResult, MediaItem, RuntimeStatus,
+    SettingsPatch, SkippedImport,
 };
 use network::download_remote_media;
 use payload::{build_active_payload, ActivePayload};
@@ -73,9 +75,11 @@ impl StudioState {
                 .retain(|id| library.get_by_id(id).is_some());
             if let Some(active) = cleaned.active_media_id.clone() {
                 if library.get_by_id(&active).is_none() {
-                    cleaned.active_media_id = cleaned.playlist_ids.first().cloned().or_else(|| {
-                        library.items().first().map(|item| item.id.clone())
-                    });
+                    cleaned.active_media_id = cleaned
+                        .playlist_ids
+                        .first()
+                        .cloned()
+                        .or_else(|| library.items().first().map(|item| item.id.clone()));
                 }
             }
             if cleaned.playlist_ids.len() != before
@@ -261,10 +265,7 @@ async fn run_live_apply_worker(app: AppHandle) {
         if state.live_apply_generation.load(Ordering::Acquire) == generation {
             break;
         }
-        if state
-            .live_apply_worker_running
-            .swap(true, Ordering::AcqRel)
-        {
+        if state.live_apply_worker_running.swap(true, Ordering::AcqRel) {
             break;
         }
     }
@@ -277,10 +278,7 @@ fn queue_live_apply(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
     state.live_apply_generation.fetch_add(1, Ordering::AcqRel);
-    if state
-        .live_apply_worker_running
-        .swap(true, Ordering::AcqRel)
-    {
+    if state.live_apply_worker_running.swap(true, Ordering::AcqRel) {
         return Ok(());
     }
     let worker_app = app.clone();
@@ -417,6 +415,97 @@ async fn advance_slideshow(app: AppHandle) -> Result<(), String> {
     .await;
     state.slideshow_busy.store(false, Ordering::SeqCst);
     result
+}
+
+fn start_managed_launch_worker(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        run_managed_launch_worker(app).await;
+    });
+}
+
+async fn run_managed_launch_worker(app: AppHandle) {
+    let mut last_signature = String::new();
+    loop {
+        if app.state::<StudioState>().quitting.load(Ordering::SeqCst) {
+            break;
+        }
+
+        let controller = Arc::clone(&app.state::<StudioState>().controller);
+        let decision =
+            match tauri::async_runtime::spawn_blocking(move || lock(&controller)?.probe_managed())
+                .await
+            {
+                Ok(Ok(decision)) => decision,
+                Ok(Err(error)) => {
+                    eprintln!("托管探测失败：{error}");
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    continue;
+                }
+                Err(error) => {
+                    eprintln!("托管探测任务失败：{error}");
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    continue;
+                }
+            };
+
+        if matches!(
+            decision.action,
+            HostedAction::Attach | HostedAction::Takeover
+        ) {
+            let app_for_payload = app.clone();
+            let payload = tauri::async_runtime::spawn_blocking(move || {
+                app_for_payload.state::<StudioState>().active_payload()
+            })
+            .await;
+            match payload {
+                Ok(Ok(payload)) => {
+                    let controller = Arc::clone(&app.state::<StudioState>().controller);
+                    let result = tauri::async_runtime::spawn_blocking(move || {
+                        lock(&controller)?.run_managed_action(payload)
+                    })
+                    .await;
+                    if let Ok(Err(error)) = result {
+                        eprintln!("自动接管失败：{error}");
+                    }
+                }
+                Ok(Err(error)) => {
+                    let controller = Arc::clone(&app.state::<StudioState>().controller);
+                    let _ = tauri::async_runtime::spawn_blocking(move || {
+                        lock(&controller)?.note_payload_unavailable(&error)
+                    })
+                    .await;
+                }
+                Err(error) => {
+                    let controller = Arc::clone(&app.state::<StudioState>().controller);
+                    let message = error.to_string();
+                    let _ = tauri::async_runtime::spawn_blocking(move || {
+                        lock(&controller)?.note_payload_unavailable(&message)
+                    })
+                    .await;
+                }
+            }
+        }
+
+        let state = app.state::<StudioState>();
+        if let Ok(status) = state.refresh_runtime_status() {
+            let signature = format!(
+                "{}|{}|{}|{}",
+                status.phase,
+                status.message,
+                status.active_targets,
+                status.last_error.as_deref().unwrap_or("")
+            );
+            if signature != last_signature {
+                last_signature = signature;
+                let _ = state.emit_snapshot(&app);
+            }
+        }
+
+        if state.quitting.load(Ordering::SeqCst) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
 }
 
 fn start_slideshow_scheduler(app: AppHandle) {
@@ -773,6 +862,7 @@ pub fn run() {
             app.manage(state);
             if plugin_mode {
                 plugin_ipc::start(app.handle().clone());
+                start_managed_launch_worker(app.handle().clone());
             } else {
                 let tray = host::setup_tray(app.handle()).map_err(std::io::Error::other)?;
                 let managed = app.state::<StudioState>();
