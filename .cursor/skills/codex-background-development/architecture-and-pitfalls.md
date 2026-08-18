@@ -337,8 +337,24 @@ background-image（不要只匹配带 `via-` 的）；同时清胶囊 border/sha
 ### 站点、已安排、插件搜索黑条
 
 原因：输入框透明，但外部 sticky 和 `::after` 仍有 main surface 与渐变。
+26.810+ 把 `bg-token-main-surface-primary` 收成 `bg-surface`，
+`after:from-token-*` 收成 `after:from-surface`，旧选择器会整条漏掉。
 
-处理：按共享结构清 sticky 与伪元素，不写三个页面专用补丁。
+处理：按共享结构同时匹配旧 token 和新 `bg-surface` / `from-surface`，
+清 sticky 与伪元素，不写三个页面专用补丁。
+
+### 26.810+ 首页四张黑卡片 / 设置页实底 / 拉取请求大黑块 / 对话底栏阴影
+
+原因：同一轮 token 更名。首页推荐从 `.home-banners` 变成
+`button.rounded-2xl.bg-surface`；设置页整页壳改成 `electron:bg-surface`，
+分组卡片描边改成 `border-default`；拉取请求左右栏用 `bg-surface` 铺满；
+对话底栏改成 `bg-gradient-to-t from-surface via-surface`。
+
+处理：旧 token 选择器保留，并补 `bg-surface`、`electron:bg-surface`、
+`from-surface`、`border-default`。首页四张卡只打在带 `home-icon` 的主区。
+文件卡片和「产出/来源」用精确 `class~=` token，不要写成
+`[class*="bg-surface-elevated-secondary"]`，否则搜索框
+`electron:dark:bg-surface-elevated-secondary` 会被菜单透明度误伤。
 
 ### 终端字符白底、选区黑底
 

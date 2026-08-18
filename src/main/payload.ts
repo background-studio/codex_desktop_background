@@ -91,7 +91,9 @@ html.codex-background-active div[class~="fixed"][class~="left-0"][class~="z-[42]
 
 /* 26.727+ 把旧全局类 main-surface / app-shell-main-content-* / app-header-tint
    收成 CSS Modules（_MainContentSurface_*、_MainContentViewport_* 等）。
-   旧全局类与模块局部类名并存，避免再因 Codex 更新整页变实底。 */
+   26.810+ 再把 bg-token-main-surface-primary / from-token-main-surface-primary
+   / border-token-border 收成 bg-surface、from-surface、border-default。
+   旧全局类、模块局部类与新旧 token 并存，避免再因 Codex 更新整页变实底。 */
 html.codex-background-active aside.app-shell-left-panel nav,
 html.codex-background-active div[class~="fixed"][class~="left-0"][class~="z-[42]"][class*="top-(--height-toolbar-sm)"] > aside[class*="bg-token-main-surface-primary"] nav,
 html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) > :is(header.app-header-tint, header[class*="Header"]),
@@ -110,6 +112,10 @@ html.codex-background-active body > .codex-dialog {
 html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) {
   background: transparent !important;
   backdrop-filter: none !important;
+  /* Codex 26.810+ applies electron:elevation-prominent to the main shell
+     itself.  Once its surface is transparent, the elevation shadow becomes
+     an isolated dark frame around every route (settings, chat, lists). */
+  box-shadow: none !important;
 }
 
 html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) :is(.app-shell-main-content-viewport, [class*="MainContentViewport"]) {
@@ -123,10 +129,12 @@ html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"
   background: transparent !important;
 }
 /* 新版 list/detail（拉取请求、站点、已安排、插件）不再用 [role=main]，
-   而用 token surface 铺满。整页壳统一清掉，卡片/横幅再按菜单透明度单独打底。 */
-html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) :is(div, section, aside)[class~="bg-token-main-surface-primary"] {
+   而用 token surface 铺满。26.810+ 改成 bg-surface / electron:bg-surface。
+   整页壳统一清掉，卡片/横幅再按菜单透明度单独打底。 */
+html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) :is(div, section, aside):is([class~="bg-token-main-surface-primary"], [class~="bg-surface"], [class~="electron:bg-surface"]) {
   background: transparent !important;
   background-color: transparent !important;
+  box-shadow: none !important;
 }
 /* 设置页等内容会在 viewport 内再嵌一层 div.main-surface（原生实底 #181818），
    外层 main 透明后仍会被这层挡住全局背景。 */
@@ -134,26 +142,28 @@ html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"
   background: transparent !important;
   backdrop-filter: none !important;
 }
-/* 设置页分组卡片（rounded-2xl + border-token-border）原生约 #232323 实底。
-   新版设置页不再嵌套 div.main-surface，卡片直接挂在 viewport 下。 */
-html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) :is(.app-shell-main-content-viewport, [class*="MainContentViewport"]) [class~="overflow-hidden"][class~="rounded-2xl"][class~="border"][class*="border-token-border"],
-html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) :is(.app-shell-main-content-viewport, [class*="MainContentViewport"]) div:is(.main-surface, [class*="MainContentSurface"]) [class~="overflow-hidden"][class~="rounded-2xl"][class~="border"][class*="border-token-border"] {
+/* 设置页分组卡片（rounded-2xl + border）原生约 #232323 实底。
+   新版设置页不再嵌套 div.main-surface，卡片直接挂在 viewport 下。
+   26.810+ 描边从 border-token-border 换成 border-default。 */
+html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) :is(.app-shell-main-content-viewport, [class*="MainContentViewport"]) [class~="overflow-hidden"][class~="rounded-2xl"][class~="border"]:is([class*="border-token-border"], [class~="border-default"]),
+html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) :is(.app-shell-main-content-viewport, [class*="MainContentViewport"]) div:is(.main-surface, [class*="MainContentSurface"]) [class~="overflow-hidden"][class~="rounded-2xl"][class~="border"]:is([class*="border-token-border"], [class~="border-default"]) {
   background-color: color-mix(in srgb, var(--cbg-surface-color, #f6f7f7) calc(var(--cbg-menu-opacity) * 100%), transparent) !important;
   backdrop-filter: none !important;
 }
 /* 设置页提示横幅（例如个性化页“并非所有模型都支持…”），含警告色叠加层。 */
-html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) :is(.app-shell-main-content-viewport, [class*="MainContentViewport"]) aside[class~="rounded-2xl"][class*="bg-token-main-surface-primary"],
-html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) :is(.app-shell-main-content-viewport, [class*="MainContentViewport"]) div:is(.main-surface, [class*="MainContentSurface"]) aside[class~="rounded-2xl"][class*="bg-token-main-surface-primary"] {
+html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) :is(.app-shell-main-content-viewport, [class*="MainContentViewport"]) aside[class~="rounded-2xl"]:is([class*="bg-token-main-surface-primary"], [class~="bg-surface"]),
+html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) :is(.app-shell-main-content-viewport, [class*="MainContentViewport"]) div:is(.main-surface, [class*="MainContentSurface"]) aside[class~="rounded-2xl"]:is([class*="bg-token-main-surface-primary"], [class~="bg-surface"]) {
   background-color: color-mix(in srgb, var(--cbg-surface-color, #f6f7f7) calc(var(--cbg-menu-opacity) * 100%), transparent) !important;
   backdrop-filter: none !important;
   box-shadow: none !important;
 }
-html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) :is(.app-shell-main-content-viewport, [class*="MainContentViewport"]) aside[class~="rounded-2xl"][class*="bg-token-main-surface-primary"] [class*="bg-token-input-validation-warning-background"],
-html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) :is(.app-shell-main-content-viewport, [class*="MainContentViewport"]) div:is(.main-surface, [class*="MainContentSurface"]) aside[class~="rounded-2xl"][class*="bg-token-main-surface-primary"] [class*="bg-token-input-validation-warning-background"] {
+html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) :is(.app-shell-main-content-viewport, [class*="MainContentViewport"]) aside[class~="rounded-2xl"]:is([class*="bg-token-main-surface-primary"], [class~="bg-surface"]) [class*="bg-token-input-validation-warning-background"],
+html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) :is(.app-shell-main-content-viewport, [class*="MainContentViewport"]) div:is(.main-surface, [class*="MainContentSurface"]) aside[class~="rounded-2xl"]:is([class*="bg-token-main-surface-primary"], [class~="bg-surface"]) [class*="bg-token-input-validation-warning-background"] {
   background-color: transparent !important;
 }
-html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) :is(.app-shell-main-content-viewport, [class*="MainContentViewport"]) [class~="h-full"][class~="min-h-0"][class~="flex-col"][class*="bg-token-main-surface-primary"] {
+html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) :is(.app-shell-main-content-viewport, [class*="MainContentViewport"]) [class~="h-full"][class~="min-h-0"][class~="flex-col"]:is([class*="bg-token-main-surface-primary"], [class~="bg-surface"], [class~="electron:bg-surface"]) {
   background-color: transparent !important;
+  box-shadow: none !important;
 }
 
 /* 新版 Composer：
@@ -195,6 +205,31 @@ html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"
   background: transparent !important;
   background-color: transparent !important;
 }
+/* 26.810+ 对话文件卡片是 bg-surface-elevated-secondary/50，
+   右侧「产出/来源」是精确 token bg-surface-elevated-secondary（没有 /50）。
+   禁止 [class*="bg-surface-elevated-secondary"]：会误伤搜索框
+   electron:dark:bg-surface-elevated-secondary（那层跟 composer 透明度）。 */
+html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) :is([class~="bg-surface-elevated-secondary"], [class~="bg-surface-elevated-secondary/50"]) {
+  background-color: color-mix(in srgb, var(--cbg-surface-color, #f6f7f7) calc(var(--cbg-menu-opacity) * 100%), transparent) !important;
+  box-shadow: none !important;
+}
+/* 「产出/来源」外壳打底后，内部同 token 页签不要再叠一层。 */
+html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) :is([class~="bg-surface-elevated-secondary"], [class~="bg-surface-elevated-secondary/50"]) :is([class~="bg-surface-elevated-secondary"], [class~="bg-surface-elevated-secondary/50"]),
+html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) :is([class~="bg-surface-elevated-secondary"], [class~="bg-surface-elevated-secondary/50"]) :is([class~="bg-surface-elevated-secondary"], [class~="bg-surface-elevated-secondary/50"])::before {
+  background-color: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+}
+/* 旧版右侧 aside 已经按菜单透明度打过一层，里面的 elevated 卡片清透明。 */
+html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) aside[class*="z-[41]"] :is([class~="bg-surface-elevated-secondary"], [class~="bg-surface-elevated-secondary/50"]) {
+  background-color: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+}
+html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) [class*="turn-diff"] [class~="bg-surface/70"] {
+  background: transparent !important;
+  background-color: transparent !important;
+}
 /* dnd-kit 拖拽无障碍说明：原生应 display:none。侧栏/主区透明后若内联样式丢失，
    会在窗口底部露出大段英文 “To pick up a draggable item…”。 */
 html.codex-background-active [id^="DndDescribedBy-"],
@@ -208,13 +243,13 @@ html.codex-background-active button[class*="size-token-button-composer"] svg[cla
 }
 /* 输入框上方「第 N 步 / 文件已更改」浮层背后的遮罩：只有 from + to-transparent，没有 via。
    旧选择器要求 via-token，会漏掉这条 h-7 渐变，透明度为 0 时看起来就像胶囊小黑底。 */
-html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) [class*="bg-gradient-to-t"][class*="from-token-main-surface-primary"],
-html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) [class*="bg-linear-to-t"][class*="from-token-main-surface-primary"] {
+html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) [class*="bg-gradient-to-t"]:is([class*="from-token-main-surface-primary"], [class*="from-surface"]),
+html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) [class*="bg-linear-to-t"]:is([class*="from-token-main-surface-primary"], [class*="from-surface"]) {
   background-color: transparent !important;
   background-image: none !important;
 }
-html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) :is(.app-shell-main-content-viewport, [class*="MainContentViewport"]) [class~="sticky"][class*="bg-token-main-surface-primary"]:has(input[type="text"]),
-html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) :is(.app-shell-main-content-viewport, [class*="MainContentViewport"]) [class~="sticky"][class*="bg-token-main-surface-primary"]:has(input[type="text"])::after {
+html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) :is(.app-shell-main-content-viewport, [class*="MainContentViewport"]) [class~="sticky"]:is([class*="bg-token-main-surface-primary"], [class~="bg-surface"]):has(input[type="text"]),
+html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) :is(.app-shell-main-content-viewport, [class*="MainContentViewport"]) [class~="sticky"]:is([class*="bg-token-main-surface-primary"], [class~="bg-surface"]):has(input[type="text"])::after {
   background-color: transparent !important;
   background-image: none !important;
 }
@@ -230,20 +265,29 @@ html.codex-background-active :is([class~="app-header-tint"][class*="application-
    统一按菜单不透明度打底；清 elevation 描边，避免透明度为 0 时只剩 0.5px 黑边。 */
 html.codex-background-active [role="menu"],
 html.codex-background-active [role="listbox"],
-html.codex-background-active [class*="bg-token-dropdown-background"]:not(.composer-surface-chrome) {
+html.codex-background-active [class*="bg-token-dropdown-background"]:not(.composer-surface-chrome),
+html.codex-background-active [class~="bg-surface-elevated-secondary/90"] {
   background-color: color-mix(in srgb, var(--cbg-surface-color, #f6f7f7) calc(var(--cbg-menu-opacity) * 100%), transparent) !important;
   backdrop-filter: none !important;
   box-shadow: none !important;
 }
 /* 菜单内部的分组标题/子层继承透明，避免叠加出不透明色块 */
-html.codex-background-active [class*="bg-token-dropdown-background"]:not(.composer-surface-chrome) [class*="bg-token-dropdown-background"] {
+html.codex-background-active [class*="bg-token-dropdown-background"]:not(.composer-surface-chrome) [class*="bg-token-dropdown-background"],
+html.codex-background-active [class~="bg-surface-elevated-secondary/90"] [class~="bg-surface-elevated-secondary/90"] {
   background-color: transparent !important;
   backdrop-filter: none !important;
 }
 
 /* 首页推荐横幅（例如“启用快速模式”）是独立于输入栏的原生卡片。
    让卡片跟随菜单/右侧面板不透明度，避免固定实底悬在透明首页上。 */
-html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) .home-banners > aside[class*="bg-token-main-surface-primary"] {
+html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) .home-banners > aside:is([class*="bg-token-main-surface-primary"], [class~="bg-surface"]) {
+  background-color: color-mix(in srgb, var(--cbg-surface-color, #f6f7f7) calc(var(--cbg-menu-opacity) * 100%), transparent) !important;
+  backdrop-filter: none !important;
+  box-shadow: none !important;
+}
+/* 26.810+ 首页四个推荐卡片：button.rounded-2xl.bg-surface + shadow-md-strong。
+   只打在带 home-icon 的主区，避免误伤其它 rounded-2xl 按钮。 */
+html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) [role="main"]:has([data-testid="home-icon"]) button[class~="rounded-2xl"][class~="bg-surface"] {
   background-color: color-mix(in srgb, var(--cbg-surface-color, #f6f7f7) calc(var(--cbg-menu-opacity) * 100%), transparent) !important;
   backdrop-filter: none !important;
   box-shadow: none !important;
@@ -665,4 +709,3 @@ export function earlyPayloadFor(payload: string, revision: string) {
     return revision;
   })()`;
 }
-

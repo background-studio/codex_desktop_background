@@ -1,6 +1,6 @@
 [package]
 name = "codex-background-studio"
-version = "0.5.4-beta.2"
+version = "0.5.4-beta.3"
 description = "Headless Codex background worker for Background Studio."
 authors = ["Codex Background Studio contributors"]
 license = "MIT"

@@ -45,11 +45,16 @@ Codex class 名可能随版本变化。这里记录的是稳定入口和定位�
 - 透明度：`--cbg-surface-opacity`。
 - `.app-shell-main-content-frame`、`[role="main"]` 和全高页面壳应透明。
 - 拉取请求 / 站点 / 已安排 / 插件等 list-detail 页常常没有 `[role="main"]`，
-  而是用 `:is(div, section, aside)[class~="bg-token-main-surface-primary"]` 铺满；这些壳要清透明。
+  而是用 token surface 铺满；这些壳要清透明。
+  - 旧：`:is(div, section, aside)[class~="bg-token-main-surface-primary"]`
+  - 26.810+：`:is(div, section, aside):is([class~="bg-surface"], [class~="electron:bg-surface"])`
+    设置页整页壳还带 `electron:elevation-prominent`，清底时一并去掉 box-shadow。
 - 旧版设置页会在 viewport 内再嵌一层 `div.main-surface`；新版不再嵌套，卡片直接挂在 viewport 下。
-- 设置分组卡片：`[class~="overflow-hidden"][class~="rounded-2xl"][class~="border"][class*="border-token-border"]`
+- 设置分组卡片：`[class~="overflow-hidden"][class~="rounded-2xl"][class~="border"]`
+  加上 `:is([class*="border-token-border"], [class~="border-default"])`，
   跟随 `--cbg-menu-opacity`；选择器不要再强制要求嵌套 `div.main-surface`。
-- 设置页提示横幅：`aside.rounded-2xl[class*="bg-token-main-surface-primary"]`
+- 设置页提示横幅：`aside.rounded-2xl` 且带
+  `:is([class*="bg-token-main-surface-primary"], [class~="bg-surface"])`，
   跟随 `--cbg-menu-opacity`；内部警告色叠加层清掉，避免实底回潮。
 - 设置页输入：`[class*="bg-token-input-background"]`（例如 `#personal-agents-editor`）
   跟随 `--cbg-composer-opacity`。
@@ -78,9 +83,12 @@ Codex class 名可能随版本变化。这里记录的是稳定入口和定位�
 
 - 用户入口：左侧“新建任务”。
 - 主内容：普通 `[role="main"]`，显示“我们该构建什么？”和 composer。
-- 首页横幅：`.home-banners > aside[class*="bg-token-main-surface-primary"]`
+- 首页横幅：`.home-banners > aside:is([class*="bg-token-main-surface-primary"], [class~="bg-surface"])`
 - 横幅示例：“启用快速模式”。
 - 横幅透明度：`--cbg-menu-opacity`；清原生 shadow，不隐藏文字和按钮。
+- 26.810+ 首页四个推荐卡片：
+  `[role="main"]:has([data-testid="home-icon"]) button[class~="rounded-2xl"][class~="bg-surface"]`
+  例如“探索并理解代码”。跟随 `--cbg-menu-opacity`，并清 `shadow-md-strong`。
 
 ### 拉取请求
 
@@ -101,7 +109,9 @@ Codex class 名可能随版本变化。这里记录的是稳定入口和定位�
 
 - 用户入口：左侧“已安排”。
 - 搜索输入 id：`#scheduled-page-search`
-- 搜索外层是带 `bg-token-main-surface-primary` 和 `::after` 渐变的 sticky。
+- 搜索外层是带 surface 实底和 `::after` 渐变的 sticky。
+  旧类是 `bg-token-main-surface-primary`，26.810+ 改成 `bg-surface`
+  和 `after:from-surface`。
 - 清 sticky 实底和 `::after`，输入框自身继续跟随 composer 透明度。
 
 ### 插件
@@ -117,13 +127,13 @@ Codex class 名可能随版本变化。这里记录的是稳定入口和定位�
 
 ```css
 :is(.app-shell-main-content-viewport, [class*="MainContentViewport"])
-  [class~="sticky"][class*="bg-token-main-surface-primary"]:has(input[type="text"])
+  [class~="sticky"]:is([class*="bg-token-main-surface-primary"], [class~="bg-surface"]):has(input[type="text"])
 ```
 
 处理内容：
 
 - sticky 的 `background-color` 透明；
-- sticky 的 `::after` 背景和渐变关闭（含 Tailwind v4 的 `after:bg-linear-to-b`）；
+- sticky 的 `::after` 背景和渐变关闭（含 Tailwind v4 的 `after:bg-linear-to-b` / `after:from-surface`）；
 - 内部 `div.no-drag:has(> input[type="text"])` 跟随 `--cbg-composer-opacity`。
 
 ## 输入和弹层
@@ -136,6 +146,14 @@ Codex class 名可能随版本变化。这里记录的是稳定入口和定位�
   `div.group/activity-header`。不要只写 `button`，否则 MCP 小图标仍留 `#181818` 小黑框。
 - 原生为 `#181818` 实底；背景工具开启时必须透明。
 - 「已编辑 N 个文件」左侧还有 `bg-token-bg-secondary` 图标壳（约 92% 黑），一并清掉。
+- 26.810+ 文件卡片本体是 `[class~="bg-surface-elevated-secondary/50"]`，行是
+  `[class~="bg-surface/70"]`。外层跟随 `--cbg-menu-opacity`，行清透明。
+- 右侧「产出/来源」是 `rounded-3xl` + 精确 token `[class~="bg-surface-elevated-secondary"]`
+  （没有 `/50`），挂在对话区 `z-40` 浮层里，**不在** `aside[class*="z-[41]"]`。
+  外壳跟菜单透明度；内部同 token 页签（含 `::before`）清透明，避免叠两层。
+- 禁止 `[class*="bg-surface-elevated-secondary"]`。拉取请求 / 已安排 / 插件 /
+  设置的搜索框带 `electron:dark:bg-surface-elevated-secondary`，那层必须继续走
+  composer 透明度。
 
 ### dnd-kit 无障碍节点
 
@@ -162,9 +180,10 @@ Codex class 名可能随版本变化。这里记录的是稳定入口和定位�
   - `box-shadow`
   - `border-color`
   - `backdrop-filter`
-  - `bg-gradient-to-t` + `from-token-main-surface-primary` 底部渐变（含只有
-    `from`/`to-transparent`、没有 `via` 的那条；输入框上方「第 N 步 / 文件已更改」
-    背后的 `h-7` 遮罩漏清时会变成胶囊小黑底）
+  - `bg-gradient-to-t` + `from-token-main-surface-primary` / `from-surface` 底部渐变
+    （含只有 `from`/`to-transparent`、没有 `via` 的那条；输入框上方「第 N 步 / 文件已更改」
+    背后的 `h-7` 遮罩，以及 26.810+ 对话页 `from-surface via-surface` 底栏，
+    漏清时会变成胶囊小黑底或整条黑阴影）
   - 底部文件变更胶囊本身：`rounded-3xl border-token-border bg-token-input-background`，
     透明度为 0 时还要 `border-width: 0`，父层 `overflow: visible`
 
@@ -179,6 +198,7 @@ Codex class 名可能随版本变化。这里记录的是稳定入口和定位�
 - `[role="menu"]`
 - `[role="listbox"]`
 - `[class*="bg-token-dropdown-background"]:not(.composer-surface-chrome)`
+- 26.810+ 个人资料菜单、项目弹出层：`[class~="bg-surface-elevated-secondary/90"]`
 - 透明度：`--cbg-menu-opacity`
 - 必须清：`box-shadow` / `electron:elevation-prominent`。菜单透明度为 0 时底色全透，
   原生 0.5px elevation 描边会变成「变更」浮层上的小黑边。
