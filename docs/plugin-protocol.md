@@ -38,7 +38,7 @@ worker 创建 Named Pipe 后等待命令。未收到有效 `configure` 之前只
 {
   "pluginProtocol": 2,
   "pluginId": "codex",
-  "version": "0.5.4-beta.3",
+  "version": "0.6.0",
   "capabilities": {
     "mediaKinds": ["image", "video"],
     "injection": "cdp-blob",
