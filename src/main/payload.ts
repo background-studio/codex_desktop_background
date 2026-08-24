@@ -460,17 +460,19 @@ export function buildRendererPayload(input: PayloadInput) {
       "--cbg-media-url", "--cbg-surface-color"
     ];
 
+    const RUN_SEQ = "__CODEX_BACKGROUND_RUN_SEQ__";
+    const runToken = (window[RUN_SEQ] = (Number(window[RUN_SEQ]) || 0) + 1);
+    const superseded = () => window[RUN_SEQ] !== runToken;
     const previous = window[STATE];
-    if (previous?.cleanup) {
-      previous.cleanup();
-    } else {
-      if (previous?.observer) previous.observer.disconnect();
-      if (previous?.timer) clearInterval(previous.timer);
-      previous?.layer?.remove();
-      if (previous?.blobUrl) URL.revokeObjectURL(previous.blobUrl);
-    }
     let scheduled = null;
     let shadowPatch = null;
+    let observer = null;
+    let timer = null;
+    let state = null;
+    let layer = null;
+    let tile = null;
+    let overlay = null;
+    let activeMedia = null;
 
     // Codex 渲染页无法访问本机 HTTP 服务，媒体以 base64 内嵌传入，
     // 在页面内转成 Blob URL 使用
@@ -483,6 +485,60 @@ export function buildRendererPayload(input: PayloadInput) {
       const mime = /^data:([^;,]+)/.exec(config.mediaUrl)?.[1] || "application/octet-stream";
       return URL.createObjectURL(new Blob([bytes], { type: mime }));
     })();
+
+    const candidate = document.createElement(config.mediaKind === "video" ? "video" : "img");
+    candidate.setAttribute("aria-hidden", "true");
+    if (config.mediaKind === "video") {
+      candidate.autoplay = true;
+      candidate.loop = true;
+      candidate.muted = Boolean(config.display.videoMuted);
+      candidate.defaultMuted = Boolean(config.display.videoMuted);
+      candidate.playsInline = true;
+      candidate.preload = "auto";
+      candidate.playbackRate = Number(config.display.videoPlaybackRate) || 1;
+    }
+
+    // 新媒体在脱离文档的节点中完成首帧加载/解码。旧背景在此期间继续显示，
+    // 避免先拆旧层、再等待新媒体产生可绘制像素时露出原生底色。
+    const mediaReady = new Promise((resolve, reject) => {
+      let settled = false;
+      let readyTimeout = null;
+      const finish = (error) => {
+        if (settled) return;
+        settled = true;
+        if (readyTimeout) clearTimeout(readyTimeout);
+        candidate.removeEventListener("load", onReady);
+        candidate.removeEventListener("loadeddata", onReady);
+        candidate.removeEventListener("error", onError);
+        if (error) reject(error);
+        else resolve();
+      };
+      const onReady = () => finish();
+      const onError = () => finish(new Error("背景媒体加载失败"));
+      candidate.addEventListener("error", onError);
+      if (config.mediaKind === "video") {
+        candidate.addEventListener("loadeddata", onReady);
+      } else {
+        candidate.addEventListener("load", onReady);
+      }
+      readyTimeout = setTimeout(() => {
+        const ready = config.mediaKind === "video"
+          ? candidate.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+          : candidate.complete && candidate.naturalWidth > 0;
+        if (ready) onReady();
+        else onError();
+      }, 10000);
+      candidate.src = blobUrl;
+      if (config.mediaKind === "video") {
+        candidate.load();
+      } else if (typeof candidate.decode === "function") {
+        candidate.decode().then(onReady).catch(() => {
+          // 某些 Chromium 版本会在 load 事件前提前拒绝 decode；继续等 load，
+          // 只有最终仍没有可用像素时才保留旧背景并报告失败。
+          if (candidate.complete && candidate.naturalWidth > 0) onReady();
+        });
+      }
+    });
 
     const installReviewShadowStyle = (host, shadow = host?.shadowRoot) => {
       if (!shadow) return false;
@@ -500,14 +556,24 @@ export function buildRendererPayload(input: PayloadInput) {
       return true;
     };
 
-    const cleanup = () => {
-      const state = window[STATE];
-      state?.observer?.disconnect();
-      if (state?.timer) clearInterval(state.timer);
+    const suspend = () => {
+      observer?.disconnect();
+      if (timer) clearInterval(timer);
       if (scheduled) cancelAnimationFrame(scheduled);
       if (shadowPatch?.prototype.attachShadow === shadowPatch.wrapped) {
         shadowPatch.prototype.attachShadow = shadowPatch.original;
       }
+      observer = null;
+      timer = null;
+      scheduled = null;
+      shadowPatch = null;
+    };
+
+    const cleanup = () => {
+      suspend();
+      // 已被下一轮接管的旧媒体可能稍后才冒出 error 事件；旧 cleanup
+      // 只能收自己的运行时，不能把当前背景层和样式一并删掉。
+      if (state && window[STATE] !== state) return true;
       document.getElementById(LAYER_ID)?.remove();
       document.getElementById(STYLE_ID)?.remove();
       document.querySelectorAll("diffs-container").forEach((host) => {
@@ -516,7 +582,7 @@ export function buildRendererPayload(input: PayloadInput) {
       document.documentElement?.classList.remove(...ROOT_CLASSES);
       for (const property of ROOT_PROPERTIES) document.documentElement?.style.removeProperty(property);
       if (state?.blobUrl) URL.revokeObjectURL(state.blobUrl);
-      delete window[STATE];
+      if (window[STATE] === state) delete window[STATE];
       return true;
     };
 
@@ -536,8 +602,6 @@ export function buildRendererPayload(input: PayloadInput) {
       prototype.attachShadow = wrapped;
       return { prototype, original, wrapped };
     };
-    shadowPatch = patchAttachShadow();
-
     // 检测 Codex 原生外观：优先读根节点/滚动容器的计算 color-scheme
     //（跟随应用内主题设置），系统偏好只作兜底
     const detectAppearance = () => {
@@ -601,32 +665,32 @@ export function buildRendererPayload(input: PayloadInput) {
         installReviewShadowStyle(host);
       });
 
-      let layer = document.getElementById(LAYER_ID);
+      layer = document.getElementById(LAYER_ID);
       if (!layer && document.body) {
         layer = document.createElement("div");
         layer.id = LAYER_ID;
-        const media = document.createElement(config.mediaKind === "video" ? "video" : "img");
-        media.id = "codex-background-media";
-        media.setAttribute("aria-hidden", "true");
-        if (config.mediaKind === "video") {
-          media.autoplay = true;
-          media.loop = true;
-          media.muted = Boolean(config.display.videoMuted);
-          media.defaultMuted = Boolean(config.display.videoMuted);
-          media.playsInline = true;
-          media.playbackRate = Number(config.display.videoPlaybackRate) || 1;
-        }
-        media.src = blobUrl;
-        // 媒体加载失败时整体回退到原生外观，避免留下深色空背景层遮挡界面
-        media.addEventListener("error", () => cleanup());
-        const tile = document.createElement("div");
+        tile = document.createElement("div");
         tile.id = "codex-background-tile";
-        const overlay = document.createElement("div");
+        overlay = document.createElement("div");
         overlay.id = "codex-background-overlay";
-        layer.append(media, tile, overlay);
+        layer.append(activeMedia, tile, overlay);
         document.body.prepend(layer);
-        if (config.mediaKind === "video") media.play().catch(() => undefined);
+      } else if (layer) {
+        if (activeMedia.parentNode !== layer) layer.prepend(activeMedia);
+        tile = layer.querySelector("#codex-background-tile") || tile;
+        if (!tile) {
+          tile = document.createElement("div");
+          tile.id = "codex-background-tile";
+          layer.appendChild(tile);
+        }
+        overlay = layer.querySelector("#codex-background-overlay") || overlay;
+        if (!overlay) {
+          overlay = document.createElement("div");
+          overlay.id = "codex-background-overlay";
+          layer.appendChild(overlay);
+        }
       }
+      if (state) state.layer = layer;
 
       setClass("codex-background-active", true);
       setClass("codex-background-fit-tile", config.display.fit === "tile" && config.mediaKind === "image");
@@ -663,22 +727,62 @@ export function buildRendererPayload(input: PayloadInput) {
       if (scheduled) return;
       scheduled = requestAnimationFrame(() => { scheduled = null; install(); });
     };
-    const observer = new MutationObserver(scheduleInstall);
-    observer.observe(document.documentElement, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ["class", "data-theme", "data-appearance"],
+    return mediaReady.then(() => {
+      if (superseded()) {
+        if (String(blobUrl).startsWith("blob:")) URL.revokeObjectURL(blobUrl);
+        return { installed: false, superseded: true, revision: config.revision };
+      }
+      // 只有新媒体已经可绘制后才停止旧运行时。旧版状态没有 suspend，
+      // 此处才调用完整 cleanup；删除与重建发生在同一任务内，不会产生可见空帧。
+      if (previous?.suspend) {
+        previous.suspend();
+      } else if (previous?.cleanup) {
+        previous.cleanup();
+      } else {
+        previous?.observer?.disconnect();
+        if (previous?.timer) clearInterval(previous.timer);
+      }
+
+      layer = document.getElementById(LAYER_ID);
+      const previousMedia = layer?.querySelector("#codex-background-media");
+      tile = layer?.querySelector("#codex-background-tile") || null;
+      overlay = layer?.querySelector("#codex-background-overlay") || null;
+      activeMedia = candidate;
+      activeMedia.id = "codex-background-media";
+      if (previousMedia) previousMedia.replaceWith(activeMedia);
+
+      state = { revision: config.revision, cleanup, suspend, observer: null, timer: null, layer, blobUrl };
+      window[STATE] = state;
+      shadowPatch = patchAttachShadow();
+      install();
+
+      observer = new MutationObserver(scheduleInstall);
+      observer.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["class", "data-theme", "data-appearance"],
+      });
+      timer = setInterval(install, 4000);
+      state.observer = observer;
+      state.timer = timer;
+      state.layer = layer;
+      activeMedia.addEventListener("error", () => cleanup(), { once: true });
+      if (config.mediaKind === "video") activeMedia.play().catch(() => undefined);
+
+      if (previous?.suspend && previous.blobUrl && previous.blobUrl !== blobUrl) {
+        URL.revokeObjectURL(previous.blobUrl);
+      }
+      return { installed: true, revision: config.revision, mediaKind: config.mediaKind };
+    }).catch((error) => {
+      if (blobUrl && blobUrl !== previous?.blobUrl) URL.revokeObjectURL(blobUrl);
+      throw error;
     });
-    const timer = setInterval(install, 4000);
-    window[STATE] = { revision: config.revision, cleanup, observer, timer, layer: null, blobUrl };
-    install();
-    window[STATE].layer = document.getElementById(LAYER_ID);
-    return { installed: true, revision: config.revision, mediaKind: config.mediaKind };
   })(${serialized}, ${css}, ${reviewShadowCss}, ${reviewShadowStyleId})`;
 }
 
 export const REMOVE_RENDERER_PAYLOAD = String.raw`(() => {
+  window.__CODEX_BACKGROUND_RUN_SEQ__ = (Number(window.__CODEX_BACKGROUND_RUN_SEQ__) || 0) + 1;
   const state = window.__CODEX_BACKGROUND_STUDIO__;
   if (state?.cleanup) return state.cleanup();
   document.getElementById("codex-background-layer")?.remove();

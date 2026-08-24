@@ -173,6 +173,12 @@ mod tests {
         assert!(payload.script.contains("bg-surface-elevated-secondary/90"));
         assert!(payload.script.contains("bg-surface/70"));
         assert!(payload.script.contains("rounded-2xl"));
+        assert!(payload.script.contains("candidate.decode()"));
+        assert!(payload
+            .script
+            .contains("previousMedia.replaceWith(activeMedia)"));
+        assert!(payload.script.contains("__CODEX_BACKGROUND_RUN_SEQ__"));
+        assert!(payload.script.contains("previous?.suspend"));
         assert!(payload.script.contains(PENDING_MEDIA_URL_KEY));
         assert!(!payload.script.contains("data:image/png;base64,"));
         assert!(payload

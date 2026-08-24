@@ -40,7 +40,9 @@ window.__CODEX_BACKGROUND_STUDIO__
 - `#codex-background-overlay`：颜色遮罩。
 - `#codex-background-review-shadow-style`：每个 diff Shadow Root 内的审阅覆盖。
 
-重应用前先调用旧状态的 `cleanup()`，避免：
+首次注入和恢复官方外观使用完整 `cleanup()`。运行时换图则先在离屏媒体节点完成
+加载/解码，再暂停旧 observer/timer 并原位替换媒体；新状态接管后才释放旧 Blob URL。
+这样既不会在两张图之间露出原生底色，也继续避免：
 
 - observer/timer 重复；
 - Blob URL 泄漏；
