@@ -90,6 +90,7 @@ impl HostedInput {
 pub struct HostedMachine {
     armed: bool,
     paused: bool,
+    auto_takeover_blocked: bool,
     baseline: Vec<ProcessKey>,
     session: Vec<ProcessKey>,
     confirmations: u8,
@@ -111,6 +112,7 @@ impl HostedMachine {
         Self {
             armed: false,
             paused: false,
+            auto_takeover_blocked: false,
             baseline: Vec::new(),
             session: Vec::new(),
             confirmations: 0,
@@ -165,6 +167,7 @@ impl HostedMachine {
     pub fn arm(&mut self, processes: &[ProcessKey]) {
         self.armed = true;
         self.paused = false;
+        self.auto_takeover_blocked = false;
         self.baseline = processes.to_vec();
         self.session.clear();
         self.clear_takeover_candidate();
@@ -192,6 +195,7 @@ impl HostedMachine {
     pub fn rearm_after_apply(&mut self, processes: &[ProcessKey]) {
         self.armed = true;
         self.paused = false;
+        self.auto_takeover_blocked = false;
         self.baseline.clear();
         self.session = processes.to_vec();
         self.clear_takeover_candidate();
@@ -211,6 +215,7 @@ impl HostedMachine {
 
     pub fn note_takeover_failed(&mut self, processes: &[ProcessKey]) {
         self.baseline = processes.to_vec();
+        self.auto_takeover_blocked = true;
         self.session.clear();
         self.clear_takeover_candidate();
         self.debug_wait_started = None;
@@ -247,6 +252,17 @@ impl HostedMachine {
             self.clear_takeover_candidate();
             self.phase = HostedPhase::ExistingUnmanaged;
             return self.outcome(HostedAction::ReportDebugTimeout);
+        }
+
+        if self.auto_takeover_blocked {
+            if self.baseline.is_empty() {
+                self.baseline = input.processes.clone();
+            }
+            self.session.clear();
+            self.clear_takeover_candidate();
+            self.clear_debug_wait();
+            self.phase = HostedPhase::ExistingUnmanaged;
+            return self.outcome(HostedAction::ReportExistingUnmanaged);
         }
 
         if input.connected {
@@ -661,9 +677,10 @@ mod tests {
     }
 
     #[test]
-    fn debug_wait_times_out_without_killing_and_rearms_after_exit() {
+    fn debug_wait_times_out_without_killing_and_blocks_auto_takeover() {
         let process = key(32, 410);
         let next = key(33, 520);
+        let later = key(34, 620);
         let now = Instant::now();
         let mut machine = HostedMachine::new().with_confirmations(1);
         machine.arm(&[]);
@@ -711,6 +728,26 @@ mod tests {
         assert_eq!(
             machine
                 .decide(&input_at(&[next], now + Duration::from_secs(52)))
+                .action,
+            HostedAction::ReportExistingUnmanaged
+        );
+        assert_ne!(
+            machine
+                .decide(&input_at(&[next], now + Duration::from_secs(53)))
+                .action,
+            HostedAction::Takeover
+        );
+
+        machine.rearm_after_apply(&[next]);
+        assert_eq!(
+            machine
+                .decide(&input_at(&[], now + Duration::from_secs(54)))
+                .action,
+            HostedAction::CleanupDisconnected
+        );
+        assert_eq!(
+            machine
+                .decide(&input_at(&[later], now + Duration::from_secs(55)))
                 .action,
             HostedAction::Takeover
         );
@@ -809,6 +846,40 @@ mod tests {
         );
         assert_ne!(
             machine.decide(&input(&[process])).action,
+            HostedAction::Takeover
+        );
+    }
+
+    #[test]
+    fn failed_takeover_without_a_surviving_process_blocks_future_auto_takeover() {
+        let first_plain = key(73, 920);
+        let next_plain = key(74, 930);
+        let mut machine = HostedMachine::new().with_confirmations(1);
+        machine.arm(&[]);
+        machine.note_takeover_failed(&[]);
+
+        assert_eq!(machine.decide(&input(&[])).action, HostedAction::Wait);
+        assert_eq!(
+            machine.decide(&input(&[first_plain])).action,
+            HostedAction::ReportExistingUnmanaged
+        );
+        assert_eq!(machine.decide(&input(&[])).action, HostedAction::Wait);
+        assert_eq!(
+            machine.decide(&input(&[next_plain])).action,
+            HostedAction::ReportExistingUnmanaged
+        );
+        assert_ne!(
+            machine.decide(&input(&[next_plain])).action,
+            HostedAction::Takeover
+        );
+
+        machine.rearm_after_apply(&[next_plain]);
+        assert_eq!(
+            machine.decide(&input(&[])).action,
+            HostedAction::CleanupDisconnected
+        );
+        assert_eq!(
+            machine.decide(&input(&[first_plain])).action,
             HostedAction::Takeover
         );
     }

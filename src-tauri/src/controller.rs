@@ -30,6 +30,9 @@ use crate::{
 };
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+const APP_ACTIVATION_RETRY_INTERVAL: Duration = Duration::from_millis(750);
+const APP_ACTIVATION_TIMEOUT: Duration = Duration::from_secs(15);
+const DEBUG_SESSION_START_TIMEOUT: Duration = Duration::from_secs(45);
 const DISCOVER_SCRIPT: &str = r#"
 $ErrorActionPreference = 'Stop'
 $packages = @(Get-AppxPackage -Name 'OpenAI.Codex' | Sort-Object Version -Descending)
@@ -297,6 +300,20 @@ $launchedProcessId
     run_powershell(&script, Duration::from_secs(30)).map(|_| ())
 }
 
+fn launch_codex_and_wait(install: &CodexInstall, arguments: &[String]) -> Result<(), String> {
+    let deadline = Instant::now() + APP_ACTIVATION_TIMEOUT;
+    loop {
+        launch_codex(install, arguments)?;
+        thread::sleep(APP_ACTIVATION_RETRY_INTERVAL);
+        if !process_ids_for(install)?.is_empty() {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err("Windows 已接受 Codex 激活请求，但未创建应用进程。".to_string());
+        }
+    }
+}
+
 fn select_port(preferred: u16) -> Result<u16, String> {
     for port in preferred..=preferred.saturating_add(100) {
         if TcpListener::bind(("127.0.0.1", port)).is_ok() {
@@ -479,38 +496,63 @@ impl CodexController {
         install: &CodexInstall,
         payload: ActivePayload,
     ) -> Result<(), String> {
-        if !process_ids_for(install)?.is_empty() {
-            stop_verified_codex(install)?;
+        let result = (|| {
+            if !process_ids_for(install)?.is_empty() {
+                stop_verified_codex(install)?;
+            }
+            let port = select_port(9335)?;
+            launch_codex_and_wait(
+                install,
+                &[
+                    "--remote-debugging-address=127.0.0.1".to_string(),
+                    format!("--remote-debugging-port={port}"),
+                ],
+            )?;
+            let deadline = Instant::now() + DEBUG_SESSION_START_TIMEOUT;
+            let browser_id = loop {
+                if let Ok(identity) = read_browser_identity(port) {
+                    break identity;
+                }
+                if process_ids_for(install)?.is_empty() {
+                    return Err("Codex 调试进程在端口就绪前提前退出。".to_string());
+                }
+                if Instant::now() >= deadline {
+                    return Err("Codex 未能在 45 秒内打开安全的本机调试端口。".to_string());
+                }
+                thread::sleep(Duration::from_millis(400));
+            };
+            self.write_state(Some(RuntimeState {
+                schema_version: 1,
+                port,
+                browser_id: browser_id.clone(),
+                package_full_name: install.package_full_name.clone(),
+                executable: install.executable.clone(),
+                created_at: Utc::now().to_rfc3339(),
+            }))?;
+            let mut engine = InjectorEngine::new(port, browser_id);
+            engine.start(payload)?;
+            self.engine = Some(engine);
+            Ok(())
+        })();
+
+        if let Err(error) = result {
+            self.drop_engine();
+            let _ = self.write_state(None);
+            let fallback = (|| {
+                if !process_ids_for(install)?.is_empty() {
+                    stop_verified_codex(install)?;
+                }
+                launch_codex_and_wait(install, &[])
+            })();
+            let keys = matching_processes(install).unwrap_or_default();
+            self.hosted.note_takeover_failed(&keys);
+            return Err(match fallback {
+                Ok(()) => format!("{error} 已恢复普通 Codex 启动。"),
+                Err(fallback_error) => {
+                    format!("{error} 恢复普通 Codex 启动也失败：{fallback_error}")
+                }
+            });
         }
-        let port = select_port(9335)?;
-        launch_codex(
-            install,
-            &[
-                "--remote-debugging-address=127.0.0.1".to_string(),
-                format!("--remote-debugging-port={port}"),
-            ],
-        )?;
-        let deadline = Instant::now() + Duration::from_secs(45);
-        let browser_id = loop {
-            if let Ok(identity) = read_browser_identity(port) {
-                break identity;
-            }
-            if Instant::now() >= deadline {
-                return Err("Codex 未能在 45 秒内打开安全的本机调试端口。".to_string());
-            }
-            thread::sleep(Duration::from_millis(400));
-        };
-        self.write_state(Some(RuntimeState {
-            schema_version: 1,
-            port,
-            browser_id: browser_id.clone(),
-            package_full_name: install.package_full_name.clone(),
-            executable: install.executable.clone(),
-            created_at: Utc::now().to_rfc3339(),
-        }))?;
-        let mut engine = InjectorEngine::new(port, browser_id);
-        engine.start(payload)?;
-        self.engine = Some(engine);
         Ok(())
     }
 
@@ -970,7 +1012,7 @@ impl CodexController {
             self.install = Some(install.clone());
             if !process_ids_for(&install)?.is_empty() {
                 stop_verified_codex(&install)?;
-                launch_codex(&install, &[])?;
+                launch_codex_and_wait(&install, &[])?;
             }
             self.write_state(None)?;
             self.hosted.suspend();
