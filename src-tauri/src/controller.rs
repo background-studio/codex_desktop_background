@@ -100,14 +100,30 @@ fn encoded_powershell(script: &str) -> String {
 }
 
 fn run_powershell(script: &str, timeout: Duration) -> Result<String, String> {
+    // EncodedCommand otherwise serializes progress/errors as CLIXML. Keep the
+    // script's exit status intact and fail on cmdlet errors as well.
+    let script = format!(
+        "$ProgressPreference = 'SilentlyContinue'\n\
+         [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)\n\
+         $OutputEncoding = [Console]::OutputEncoding\n\
+         $ErrorActionPreference = 'Stop'\n\
+         try {{\n{script}\n\
+           if (-not $?) {{ exit 1 }}\n\
+         }} catch {{\n\
+           [Console]::Error.WriteLine($_.ToString())\n\
+           exit 1\n\
+         }}"
+    );
     let mut child = Command::new("powershell.exe")
         .args([
             "-NoProfile",
             "-NonInteractive",
             "-ExecutionPolicy",
             "Bypass",
+            "-OutputFormat",
+            "Text",
             "-EncodedCommand",
-            &encoded_powershell(script),
+            &encoded_powershell(&script),
         ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -226,6 +242,24 @@ $ports = @(Get-CimInstance Win32_Process -Filter "Name='ChatGPT.exe'" | Where-Ob
         .collect())
 }
 
+// Shared with harmless real-PowerShell tests; callers supply verified PIDs.
+const STOP_VERIFIED_PROCESSES_SCRIPT: &str = r#"
+foreach ($item in $processes) {
+  $processId = [int]$item.ProcessId
+  try {
+    Stop-Process -Id $processId -Force -ErrorAction Stop
+  } catch {
+    # Only process-not-found / already-exited errors can be a benign race.
+    # Access denied (Win32Exception) and other failures must remain failures.
+    $notFound = $_.FullyQualifiedErrorId -eq 'NoProcessFoundForGivenId,Microsoft.PowerShell.Commands.StopProcessCommand'
+    $alreadyExited = $_.FullyQualifiedErrorId -eq 'StopProcessException,Microsoft.PowerShell.Commands.StopProcessCommand' -and
+      $_.Exception -is [InvalidOperationException]
+    if (-not ($notFound -or $alreadyExited)) { throw }
+    if (@(Get-Process -ErrorAction Stop | Where-Object { $_.Id -eq $processId }).Count -ne 0) { throw }
+  }
+}
+"#;
+
 fn stop_verified_codex(install: &CodexInstall) -> Result<(), String> {
     let script = format!(
         r#"
@@ -234,9 +268,10 @@ $target = {}
 $processes = @(Get-CimInstance Win32_Process -Filter "Name='ChatGPT.exe'" | Where-Object {{
   $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath).Equals($target, [StringComparison]::OrdinalIgnoreCase)
 }})
-foreach ($item in $processes) {{ Stop-Process -Id ([int]$item.ProcessId) -Force -ErrorAction SilentlyContinue }}
+{}
 "#,
-        powershell_quote(&normalized_path(&install.executable))
+        powershell_quote(&normalized_path(&install.executable)),
+        STOP_VERIFIED_PROCESSES_SCRIPT
     );
     run_powershell(&script, Duration::from_secs(30))?;
     let deadline = Instant::now() + Duration::from_secs(15);
@@ -1034,6 +1069,115 @@ impl CodexController {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn powershell_preserves_chinese_output() {
+        assert_eq!(
+            run_powershell("Write-Output '中文背景测试'", Duration::from_secs(15)).unwrap(),
+            "中文背景测试"
+        );
+    }
+
+    #[test]
+    fn powershell_throw_is_readable_text() {
+        let error = run_powershell("throw '中文真实错误'", Duration::from_secs(15)).unwrap_err();
+        assert!(error.contains("中文真实错误"), "{error}");
+        assert!(
+            !error.contains("CLIXML") && !error.contains("<Objs"),
+            "{error}"
+        );
+        assert!(!error.contains('\u{fffd}'), "{error}");
+    }
+
+    #[test]
+    fn powershell_progress_only_succeeds_without_output() {
+        assert_eq!(
+            run_powershell(
+                "Write-Progress -Activity 'Preparing modules for first use' -Status '中文进度'",
+                Duration::from_secs(15)
+            )
+            .unwrap(),
+            ""
+        );
+    }
+
+    #[test]
+    fn powershell_does_not_mask_failures() {
+        assert!(run_powershell("exit 7", Duration::from_secs(15)).is_err());
+        assert!(run_powershell("cmd.exe /c exit 9", Duration::from_secs(15)).is_err());
+        let error = run_powershell(
+            "Write-Error '中文非终止错误'; 'must not succeed'",
+            Duration::from_secs(15),
+        )
+        .unwrap_err();
+        assert!(error.contains("中文非终止错误"), "{error}");
+    }
+
+    fn stop_test_process(command: &str, before_stop: &str) -> Result<String, String> {
+        // Only this newly created PowerShell is targeted. Never enumerate or
+        // invoke the production Codex stop entry point in these tests.
+        run_powershell(
+            &format!(
+                r#"
+$testProcess = Start-Process -FilePath "$PSHOME\powershell.exe" -ArgumentList '-NoProfile', '-NonInteractive', '-Command', {} -WindowStyle Hidden -PassThru
+try {{
+  $processes = @([pscustomobject]@{{ ProcessId = $testProcess.Id }})
+  {before_stop}
+  {STOP_VERIFIED_PROCESSES_SCRIPT}
+  if (-not $testProcess.WaitForExit(5000)) {{ throw '测试进程未退出' }}
+  '已确认退出'
+}} finally {{
+  if (-not $testProcess.HasExited) {{ $testProcess.Kill(); $testProcess.WaitForExit() }}
+  $testProcess.Dispose()
+}}
+"#,
+                powershell_quote(command)
+            ),
+            Duration::from_secs(20),
+        )
+    }
+
+    #[test]
+    fn powershell_stop_accepts_already_exited_test_process() {
+        let mut child = Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", "exit 0"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+        // The stop loop must be the LAST statement: a later successful command
+        // would hide the original $? = false / exit 1 regression.
+        let script = format!(
+            "$processes = @([pscustomobject]@{{ ProcessId = {} }})\n{STOP_VERIFIED_PROCESSES_SCRIPT}",
+            child.id()
+        );
+        assert_eq!(
+            run_powershell(&script, Duration::from_secs(15)).unwrap(),
+            ""
+        );
+    }
+
+    #[test]
+    fn powershell_stop_terminates_live_test_process() {
+        assert_eq!(
+            stop_test_process("Start-Sleep -Seconds 60", "").unwrap(),
+            "已确认退出"
+        );
+    }
+
+    #[test]
+    fn powershell_stop_does_not_swallow_access_denied_even_if_process_exited() {
+        let error = stop_test_process(
+            "exit 0",
+            r#"
+$testProcess.WaitForExit()
+function Stop-Process { throw (New-Object System.ComponentModel.Win32Exception -ArgumentList 5, '权限拒绝回归') }
+"#,
+        )
+        .unwrap_err();
+        assert!(error.contains("权限拒绝回归"), "{error}");
+        assert!(!error.contains("CLIXML"), "{error}");
+    }
 
     #[test]
     fn validates_store_identity_and_powershell_quoting() {
