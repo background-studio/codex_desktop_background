@@ -1188,8 +1188,13 @@ function Stop-Process { throw (New-Object System.ComponentModel.Win32Exception -
 
     #[test]
     fn selects_an_available_loopback_port() {
-        let port = select_port(39_000).expect("available test port");
-        assert!((39_000..=39_100).contains(&port));
+        // Avoid assuming a fixed port range is free on the developer's machine.
+        // Keep the first port occupied to also exercise the fallback scan.
+        let occupied = TcpListener::bind(("127.0.0.1", 0)).expect("allocate test port");
+        let preferred = occupied.local_addr().unwrap().port();
+        let port = select_port(preferred).expect("available test port");
+        assert!((preferred..=preferred.saturating_add(100)).contains(&port));
+        assert_ne!(port, preferred);
     }
 
     #[test]

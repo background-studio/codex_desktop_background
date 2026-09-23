@@ -194,7 +194,7 @@ html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"
 /* 任务时间线工具小图标：原生 svg/img 带 main-surface 实底 #181818。
    「已使用 xxx」汇总行是 button.activity-header；单独展开的 MCP 行（如 Zhi）是
    div.group/activity-header，必须一起清，否则只修了汇总行、MCP 仍留小黑框。 */
-html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) [class*="activity-header"] :is(svg, img)[class*="bg-token-main-surface-primary"] {
+html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) [class*="activity-header"] :is(svg, img):is([class~="bg-token-main-surface-primary"], [class~="bg-surface"]) {
   background: transparent !important;
   background-color: transparent !important;
 }
@@ -229,6 +229,50 @@ html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"
 html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) [class*="turn-diff"] [class~="bg-surface/70"] {
   background: transparent !important;
   background-color: transparent !important;
+}
+/* Codex 26.915 的 Pull Request 右栏把实际面板移到 aside 的内部节点，
+   使用 app-shell-panel-background 变量而不再带 main-surface token。
+   aside 本身透明后，这个子面板仍会铺满 #181818。 */
+html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) aside[class~="z-[41]"] div[class~="bg-[var(--app-shell-panel-background,var(--color-surface))]"] {
+  background: transparent !important;
+  background-color: transparent !important;
+  backdrop-filter: none !important;
+  box-shadow: none !important;
+}
+/* 文件页右栏的 D: 路径/标签导航仍直接使用 bg-surface，右栏外壳透明后
+   它会单独留下整条 #181818 横带；仅限审查侧栏中的导航。 */
+html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) aside[class*="z-[41]"] nav[class~="bg-surface"] {
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+}
+/* 对话代码块的 sticky 标题在新版改为 CSS Module _StickyActionBar_*，
+   它不再带旧的 bg-token-main-surface-primary，透明度为 0 时会留下黑色横条。 */
+html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) [class*="StickyActionBar"] {
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  backdrop-filter: none !important;
+  box-shadow: none !important;
+}
+/* 新版文件变更行的图标壳改名为 bg-surface-secondary/92；保留图标和交互，
+   只清掉覆盖背景图的小黑块。 */
+html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) [class*="turn-diff"] [class~="bg-surface-secondary/92"] {
+  background: transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+}
+/* 插件目录的应用图标外壳使用 bg-surface + shadow-lg。只在插件搜索页范围内
+   处理带图标内容的 size-9 外壳，避免影响设置页和普通按钮。 */
+html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]):has(:is(#plugins-page-search, #plugins-store-page-search)) span[class~="bg-surface"][class~="size-9"] {
+  background: transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+}
+html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]):has(:is(#plugins-page-search, #plugins-store-page-search)) div.no-drag:has(> input:is(#plugins-page-search, #plugins-store-page-search)) {
+  backdrop-filter: none !important;
+  box-shadow: none !important;
 }
 /* dnd-kit 拖拽无障碍说明：原生应 display:none。侧栏/主区透明后若内联样式丢失，
    会在窗口底部露出大段英文 “To pick up a draggable item…”。 */
@@ -312,6 +356,15 @@ html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"
   background-color: transparent !important;
   background-image: none !important;
   backdrop-filter: none !important;
+  box-shadow: none !important;
+}
+/* 审查页“差异较大，每次仅显示一个文件”提示卡的实际底色改为
+   bg-primary-soft（通常为 rgba(..., .96)），不属于右栏外壳 token。
+   仅定位审查侧栏中 absolute/inset/-z-10 的这层背景，避免影响普通卡片。 */
+html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) aside[class*="z-[41]"] :is(div, section)[class~="absolute"][class~="inset-0"][class~="-z-10"][class~="bg-primary-soft"] {
+  background: color-mix(in srgb, var(--cbg-surface-color, #f6f7f7) calc(var(--cbg-menu-opacity) * 100%), transparent) !important;
+  background-color: color-mix(in srgb, var(--cbg-surface-color, #f6f7f7) calc(var(--cbg-menu-opacity) * 100%), transparent) !important;
+  background-image: none !important;
   box-shadow: none !important;
 }
 html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) aside[class*="z-[41]"] .codex-review-diff-card,
@@ -401,6 +454,34 @@ html.codex-background-dark #codex-background-layer {
 
 const REVIEW_SHADOW_STYLE_ID = "codex-background-review-shadow-style";
 const REVIEW_SHADOW_CSS = String.raw`
+/* diffs-container 的原生 data-file 规则位于 @layer unsafe 且使用 !important。
+   必须在同一层覆盖 --diffs-bg，否则仅覆盖 :host 仍会让 pre/code 保留实底。 */
+@layer unsafe {
+  [data-file],
+  [data-diff] {
+    --diffs-bg: transparent !important;
+    --diffs-bg-buffer: transparent !important;
+    --diffs-bg-context: transparent !important;
+    --diffs-bg-separator: transparent !important;
+    --diffs-bg-hover: transparent !important;
+    background-color: transparent !important;
+  }
+  pre,
+  code,
+  [data-gutter],
+  [data-content] {
+    background-color: transparent !important;
+    background-image: none !important;
+  }
+}
+:host(file-tree-container) {
+  --trees-bg-override: transparent !important;
+}
+:host(file-tree-container) [data-file-tree-sticky-overlay-content="true"],
+:host(file-tree-container) [data-file-tree-sticky-row="true"] {
+  background-color: transparent !important;
+  background-image: none !important;
+}
 :host,
 [data-diffs-header],
 :is([data-diff], [data-file]) {
@@ -445,7 +526,7 @@ export function buildRendererPayload(input: PayloadInput) {
     const STATE = "__CODEX_BACKGROUND_STUDIO__";
     const STYLE_ID = "codex-background-style";
     const LAYER_ID = "codex-background-layer";
-    const REVIEW_HOST_SELECTOR = "diffs-container";
+    const REVIEW_HOST_SELECTORS = new Set(["diffs-container", "file-tree-container"]);
     const ROOT_CLASSES = [
       "codex-background-active", "codex-background-home", "codex-background-task",
       "codex-background-home-disabled", "codex-background-task-disabled",
@@ -576,7 +657,7 @@ export function buildRendererPayload(input: PayloadInput) {
       if (state && window[STATE] !== state) return true;
       document.getElementById(LAYER_ID)?.remove();
       document.getElementById(STYLE_ID)?.remove();
-      document.querySelectorAll("diffs-container").forEach((host) => {
+      document.querySelectorAll("diffs-container, file-tree-container").forEach((host) => {
         host.shadowRoot?.getElementById(reviewShadowStyleId)?.remove();
       });
       document.documentElement?.classList.remove(...ROOT_CLASSES);
@@ -593,7 +674,7 @@ export function buildRendererPayload(input: PayloadInput) {
       const original = prototype.attachShadow;
       const wrapped = function(init) {
         const shadow = original.call(this, init);
-        if (this.localName === REVIEW_HOST_SELECTOR) {
+        if (REVIEW_HOST_SELECTORS.has(this.localName)) {
           queueMicrotask(() => installReviewShadowStyle(this, shadow));
           requestAnimationFrame(() => installReviewShadowStyle(this, shadow));
         }
@@ -657,10 +738,11 @@ export function buildRendererPayload(input: PayloadInput) {
         style.textContent = cssText;
         style.dataset.cbgRevision = config.revision;
       }
-      // 审阅 diff 使用 Shadow DOM，普通页面 CSS 无法进入其内部。
-      // 对每个已挂载的 diff 宿主注入同一份轻量样式；定时 install 会覆盖后续新建的宿主。
+      // 审阅 diff 和文件树使用 Shadow DOM，普通页面 CSS 无法进入其内部。
+      // 对每个已挂载的宿主注入同一份轻量样式；定时 install 会覆盖后续新建的宿主。
       document.querySelectorAll(
-        'main:is(.main-surface, [class*="MainContentSurface"]) aside[class*="z-[41]"] diffs-container'
+        'main:is(.main-surface, [class*="MainContentSurface"]) aside[class*="z-[41]"] diffs-container,' +
+        'main:is(.main-surface, [class*="MainContentSurface"]) aside[class*="z-[41]"] file-tree-container'
       ).forEach((host) => {
         installReviewShadowStyle(host);
       });

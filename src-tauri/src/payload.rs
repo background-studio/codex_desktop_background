@@ -172,6 +172,16 @@ mod tests {
         assert!(payload.script.contains("bg-surface-elevated-secondary/50"));
         assert!(payload.script.contains("bg-surface-elevated-secondary/90"));
         assert!(payload.script.contains("bg-surface/70"));
+        assert!(payload
+            .script
+            .contains("bg-[var(--app-shell-panel-background"));
+        assert!(payload.script.contains("StickyActionBar"));
+        assert!(payload.script.contains("bg-surface-secondary/92"));
+        assert!(payload.script.contains("plugins-store-page-search"));
+        assert!(payload.script.contains("file-tree-container"));
+        assert!(payload.script.contains("--trees-bg-override"));
+        assert!(payload.script.contains("--diffs-bg-buffer"));
+        assert!(payload.script.contains("@layer unsafe"));
         assert!(payload.script.contains("rounded-2xl"));
         assert!(payload.script.contains("candidate.decode()"));
         assert!(payload
