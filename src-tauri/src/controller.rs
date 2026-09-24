@@ -18,11 +18,11 @@ use crate::{
     injector::{probe_browser_identity, read_browser_identity, InjectorEngine},
     managed_launch::{
         candidate_still_present, debug_ports_from_records, has_remote_debugging_arg,
-        snapshot_matching_processes, snapshot_matching_records, HostedAction, HostedInput,
-        HostedMachine, ProcessKey, ProcessRecord, MSG_AUTO_APPLIED, MSG_DEBUG_TIMEOUT,
-        MSG_EXISTING, MSG_NEED_MEDIA, MSG_SUSPENDED, MSG_TAKING_OVER, MSG_UNCONFIGURED,
-        MSG_WAITING, MSG_WAIT_DEBUG, PHASE_ACTIVE, PHASE_BLOCKED, PHASE_ERROR, PHASE_PAUSED,
-        PHASE_STARTING, PHASE_WAITING,
+        snapshot_matching_processes, HostedAction, HostedInput, HostedMachine, ProcessKey,
+        ProcessRecord, ProcessTracker, MSG_AUTO_APPLIED, MSG_DEBUG_TIMEOUT, MSG_EXISTING,
+        MSG_NEED_MEDIA, MSG_SUSPENDED, MSG_TAKING_OVER, MSG_UNCONFIGURED, MSG_WAITING,
+        MSG_WAIT_DEBUG, PHASE_ACTIVE, PHASE_BLOCKED, PHASE_ERROR, PHASE_PAUSED, PHASE_STARTING,
+        PHASE_WAITING,
     },
     models::RuntimeStatus,
     payload::ActivePayload,
@@ -69,7 +69,6 @@ struct CodexInstall {
     executable: String,
     version: String,
     package_full_name: String,
-    #[allow(dead_code)]
     package_family_name: String,
     #[allow(dead_code)]
     application_id: String,
@@ -196,8 +195,57 @@ fn discover_codex() -> Result<CodexInstall, String> {
     Ok(install)
 }
 
-fn matching_records(install: &CodexInstall) -> Result<Vec<ProcessRecord>, String> {
-    snapshot_matching_records(&install.executable)
+/// Full names of the packages of `family` installed for this user, sorted. Microseconds,
+/// where `discover_codex` starts PowerShell (~0.6 s CPU).
+fn installed_packages(family: &str) -> Option<Vec<String>> {
+    use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS};
+    use windows_sys::Win32::Storage::Packaging::Appx::GetPackagesByPackageFamily;
+
+    let family: Vec<u16> = family.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut count = 0u32;
+    let mut length = 0u32;
+    let status = unsafe {
+        GetPackagesByPackageFamily(
+            family.as_ptr(),
+            &mut count,
+            std::ptr::null_mut(),
+            &mut length,
+            std::ptr::null_mut(),
+        )
+    };
+    if count == 0 && (status == ERROR_SUCCESS || status == ERROR_INSUFFICIENT_BUFFER) {
+        return Some(Vec::new());
+    }
+    if status != ERROR_INSUFFICIENT_BUFFER {
+        return None;
+    }
+    let mut names = vec![std::ptr::null_mut::<u16>(); count as usize];
+    let mut buffer = vec![0u16; length as usize];
+    let status = unsafe {
+        GetPackagesByPackageFamily(
+            family.as_ptr(),
+            &mut count,
+            names.as_mut_ptr(),
+            &mut length,
+            buffer.as_mut_ptr(),
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return None;
+    }
+    let start = buffer.as_ptr() as usize;
+    let mut packages = names
+        .iter()
+        .take(count as usize)
+        .map(|name| {
+            let offset = (*name as usize).checked_sub(start)? / 2;
+            let rest = buffer.get(offset..)?;
+            let end = rest.iter().position(|unit| *unit == 0)?;
+            Some(String::from_utf16_lossy(&rest[..end]))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    packages.sort();
+    Some(packages)
 }
 
 fn matching_processes(install: &CodexInstall) -> Result<Vec<ProcessKey>, String> {
@@ -379,6 +427,9 @@ pub struct CodexController {
     status: RuntimeStatus,
     hosted: HostedMachine,
     install: Option<CodexInstall>,
+    /// `installed_packages` of the family at the time `install` was discovered.
+    install_packages: Option<Vec<String>>,
+    tracker: ProcessTracker,
     empty_ticks: u32,
     health_ticks: u32,
     debug_ports_cache: Vec<u16>,
@@ -402,6 +453,8 @@ impl CodexController {
             status: RuntimeStatus::default(),
             hosted: HostedMachine::new(),
             install: None,
+            install_packages: None,
+            tracker: ProcessTracker::new(),
             empty_ticks: 0,
             health_ticks: 0,
             debug_ports_cache: Vec::new(),
@@ -453,14 +506,25 @@ impl CodexController {
     }
 
     fn cached_install(&mut self, processes_empty: bool) -> Result<CodexInstall, String> {
-        let rediscover = self.install.is_none()
-            || (processes_empty && self.empty_ticks > 0 && self.empty_ticks % 20 == 0);
-        if rediscover {
-            self.install = Some(discover_codex()?);
+        let recheck = processes_empty && self.empty_ticks > 0 && self.empty_ticks % 20 == 0;
+        if self.install.is_none() || (recheck && self.install_changed()) {
+            let install = discover_codex()?;
+            self.install_packages = installed_packages(&install.package_family_name);
+            self.install = Some(install);
         }
         self.install
             .clone()
             .ok_or_else(|| "未找到经过验证的官方 OpenAI.Codex Store 应用。".to_string())
+    }
+
+    /// The discovery result only changes when a package of the family is installed,
+    /// updated or removed.
+    fn install_changed(&self) -> bool {
+        let (Some(install), Some(known)) = (&self.install, &self.install_packages) else {
+            return true;
+        };
+        installed_packages(&install.package_family_name).as_ref() != Some(known)
+            || !Path::new(&install.executable).is_file()
     }
 
     fn current_keys(&self, install: &CodexInstall) -> Result<Vec<ProcessKey>, String> {
@@ -653,13 +717,13 @@ impl CodexController {
             return Ok(ManagedDecision::from_action(HostedAction::StaySuspended));
         }
 
-        let cached_empty = match &self.install {
-            Some(install) => match matching_records(install) {
-                Ok(records) => records.is_empty(),
-                Err(_) => true,
-            },
-            None => true,
-        };
+        let first_scan = self.install.as_ref().map(|install| {
+            (
+                install.executable.clone(),
+                self.tracker.scan(&install.executable),
+            )
+        });
+        let cached_empty = !matches!(&first_scan, Some((_, Ok(records))) if !records.is_empty());
         if cached_empty {
             self.empty_ticks = self.empty_ticks.saturating_add(1);
         } else {
@@ -688,7 +752,11 @@ impl CodexController {
             }
         };
 
-        let records = match matching_records(&install) {
+        let scanned = match first_scan {
+            Some((executable, Ok(records))) if executable == install.executable => Ok(records),
+            _ => self.tracker.scan(&install.executable),
+        };
+        let records = match scanned {
             Ok(records) => {
                 self.last_probe_error_ticks = 0;
                 records
@@ -1202,9 +1270,21 @@ function Stop-Process { throw (New-Object System.ComponentModel.Win32Exception -
     fn discovers_installed_store_codex_and_reads_processes() {
         let install = discover_codex().expect("discover official Codex");
         assert!(valid_identity(&install.app_user_model_id));
+        assert_eq!(
+            installed_packages(&install.package_family_name),
+            Some(vec![install.package_full_name.clone()])
+        );
         process_ids_for(&install).expect("query verified Codex processes");
         for port in debug_ports_for(&install).expect("query verified Codex debug ports") {
             read_browser_identity(port).expect("verify Codex browser identity");
         }
+    }
+
+    #[test]
+    fn lists_no_packages_for_an_unknown_family() {
+        assert_eq!(
+            installed_packages("OpenAI.Missing_0000000000000"),
+            Some(Vec::new())
+        );
     }
 }
