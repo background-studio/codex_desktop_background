@@ -87,7 +87,7 @@ dependencies = [
 
 [[package]]
 name = "codex-background-studio"
-version = "0.6.5-beta.1"
+version = "0.6.5-beta.2"
 dependencies = [
  "base64",
  "chrono",
