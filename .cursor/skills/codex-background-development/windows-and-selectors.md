@@ -17,6 +17,8 @@ Codex class 名可能随版本变化。这里记录的是稳定入口和定位�
 ### 左侧导航栏
 
 - 用户入口：Codex 标题、新建任务、拉取请求、站点、已安排、插件、项目和任务列表。
+- 26.924 起拆成两截：最左 52px 图标栏（首页、定时任务、资料库、图像、Customize、探索）原生透明；
+  旁边 `.sidebar-navigation` 才铺约 65% 深灰。侧栏透明度只打在 `.sidebar-navigation`。
 - 稳定入口：`aside.app-shell-left-panel`
 - 透明度：`--cbg-sidebar-opacity`。
 - 内部 `nav` 应透明，避免与 aside 叠加。

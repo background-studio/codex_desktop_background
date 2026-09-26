@@ -82,10 +82,19 @@ html.codex-background-task { --cbg-route-intensity: var(--cbg-task-intensity); }
 html.codex-background-home.codex-background-home-disabled,
 html.codex-background-task.codex-background-task-disabled { --cbg-route-intensity: 0; }
 
-html.codex-background-active aside.app-shell-left-panel,
+/* 26.924 起左栏 aside 同时装着图标导航栏和 .sidebar-navigation 面板：原生图标栏透明，
+   只有面板铺约 65% 深灰。侧栏透明度只给面板打底，不把图标栏一起染色。 */
+html.codex-background-active aside.app-shell-left-panel:not(:has(.sidebar-navigation)),
+html.codex-background-active aside.app-shell-left-panel .sidebar-navigation,
 html.codex-background-active div[class~="fixed"][class~="left-0"][class~="z-[42]"][class*="top-(--height-toolbar-sm)"] > aside[class*="bg-token-main-surface-primary"] {
   background: color-mix(in srgb, var(--cbg-surface-color, #f6f7f7) calc(var(--cbg-sidebar-opacity) * 100%), transparent) !important;
   backdrop-filter: none !important;
+  box-shadow: none !important;
+}
+/* 26.924 起侧栏面板和主区外面包了一层圆角卡片 _PageSurface_*：自身透明，只画 0.5px
+   高光描边和投影，界面透明后会在整块内容外留下一圈孤立边框。
+   不能写成 [class*="PageSurface"]，否则会连外层 _PageSurfaceLayout_* 一起命中。 */
+html.codex-background-active [class*="_PageSurface_"] {
   box-shadow: none !important;
 }
 
@@ -274,6 +283,28 @@ html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"
   backdrop-filter: none !important;
   box-shadow: none !important;
 }
+/* 26.924 资料库、插件目录的 sticky 顶栏 _shell_* 自身透明，用 ::before 铺满 #181818
+   遮住下面滚动的卡片；主区透明后它就是页首一整条黑块。 */
+html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) [class*="_shell_"]::before {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+/* 资料库文件卡片是 bg-surface-elevated（约 96% #363636）+ shadow-card，
+   缩略图区再垫一层 bg-surface-tertiary。卡片跟随菜单透明度，保留文件预览本身。 */
+html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) [class~="bg-surface-elevated"][class~="shadow-card"] {
+  background-color: color-mix(in srgb, var(--cbg-surface-color, #f6f7f7) calc(var(--cbg-menu-opacity) * 100%), transparent) !important;
+  box-shadow: none !important;
+}
+html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) [class~="bg-surface-elevated"][class~="shadow-card"] [class~="bg-surface-tertiary"] {
+  background-color: transparent !important;
+}
+/* 审阅右栏顶部的悬浮胶囊 _capsule_* _controlSurface_*：底色写在 background-image 的
+   纯色渐变里（约 96% #363636）并带投影。只有胶囊画底，普通 _controlSurface_ 按钮原生透明。 */
+html.codex-background-active main:is(.main-surface, [class*="MainContentSurface"]) [class*="_capsule_"][class*="_controlSurface_"] {
+  background-color: color-mix(in srgb, var(--cbg-surface-color, #f6f7f7) calc(var(--cbg-menu-opacity) * 100%), transparent) !important;
+  background-image: none !important;
+  box-shadow: none !important;
+}
 /* dnd-kit 拖拽无障碍说明：原生应 display:none。侧栏/主区透明后若内联样式丢失，
    会在窗口底部露出大段英文 “To pick up a draggable item…”。 */
 html.codex-background-active [id^="DndDescribedBy-"],
@@ -311,6 +342,14 @@ html.codex-background-active [role="menu"],
 html.codex-background-active [role="listbox"],
 html.codex-background-active [class*="bg-token-dropdown-background"]:not(.composer-surface-chrome),
 html.codex-background-active [class~="bg-surface-elevated-secondary/90"] {
+  background-color: color-mix(in srgb, var(--cbg-surface-color, #f6f7f7) calc(var(--cbg-menu-opacity) * 100%), transparent) !important;
+  backdrop-filter: none !important;
+  box-shadow: none !important;
+}
+/* 26.924 图标导航栏「探索」等 Radix 弹层是 role=dialog，挂在 portal 里、不在 main 内，
+   用精确 token bg-surface-elevated-secondary（#2d2d2d）+ shadow-xl-spread。
+   只匹配弹层外壳的直接子节点，不影响 tooltip。 */
+html.codex-background-active [data-radix-popper-content-wrapper] > [class~="bg-surface-elevated-secondary"] {
   background-color: color-mix(in srgb, var(--cbg-surface-color, #f6f7f7) calc(var(--cbg-menu-opacity) * 100%), transparent) !important;
   backdrop-filter: none !important;
   box-shadow: none !important;

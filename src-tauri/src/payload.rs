@@ -178,6 +178,13 @@ mod tests {
         assert!(payload.script.contains("StickyActionBar"));
         assert!(payload.script.contains("bg-surface-secondary/92"));
         assert!(payload.script.contains("plugins-store-page-search"));
+        assert!(payload.script.contains("_PageSurface_"));
+        assert!(payload.script.contains(".sidebar-navigation"));
+        assert!(payload.script.contains("_shell_"));
+        assert!(payload.script.contains("shadow-card"));
+        assert!(payload.script.contains("_capsule_"));
+        assert!(payload.script.contains("_controlSurface_"));
+        assert!(payload.script.contains("data-radix-popper-content-wrapper"));
         assert!(payload.script.contains("file-tree-container"));
         assert!(payload.script.contains("--trees-bg-override"));
         assert!(payload.script.contains("--diffs-bg-buffer"));

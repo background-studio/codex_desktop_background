@@ -345,6 +345,24 @@ background-image（不要只匹配带 `via-` 的）；同时清胶囊 border/sha
 处理：按共享结构同时匹配旧 token 和新 `bg-surface` / `from-surface`，
 清 sticky 与伪元素，不写三个页面专用补丁。
 
+### 26.924 窗口透明后侧栏面板、圆角卡片描边、资料库顶栏和文件卡仍是实底
+
+原因：这一版把窗口改成 Mica（`DWMWA_SYSTEMBACKDROP_TYPE = 2`，`WS_EX_NOREDIRECTIONBITMAP`）。
+界面透明后，桌面背景直接透出来，背景层只在仍有底色的区域被盖住。同时布局换成
+图标导航栏 + `.sidebar-navigation` 面板，外面包一层 `_PageSurface_*` 圆角卡片。
+
+处理：
+
+- 侧栏透明度只打在 `.sidebar-navigation`（以及没有该面板的旧版 aside），图标栏保持透明。
+- `_PageSurface_*` 清掉 0.5px 高光描边和投影。不要写成 `[class*="PageSurface"]`，
+  否则会命中外层 `_PageSurfaceLayout_*`。
+- 资料库、插件目录的 sticky `_shell_*::before`（`#181818`）清透明。
+- 资料库 `bg-surface-elevated` + `shadow-card` 卡片跟随菜单透明度，内部
+  `bg-surface-tertiary` 清透明。
+- 审阅右栏 `_capsule_*` + `_controlSurface_*` 清掉写在 `background-image` 里的纯色渐变。
+- 「探索」等 Radix 弹层挂在 portal 里，匹配
+  `[data-radix-popper-content-wrapper] > [class~="bg-surface-elevated-secondary"]`。
+
 ### 26.810+ 首页四张黑卡片 / 设置页实底 / 拉取请求大黑块 / 对话底栏阴影
 
 原因：同一轮 token 更名。首页推荐从 `.home-banners` 变成
